@@ -67,6 +67,12 @@ def _candidates(title, source='', season=None):
     if season is not None:
         where += ' AND season=?'
         params.append(season)
+    # Categorias bloqueadas (ex.: adultos) nunca viram episódios no Jellyfin,
+    # a menos que o administrador tenha liberado a exibição delas no painel.
+    import content_filter
+    block_sql, block_params = content_filter.where(for_panel=True)
+    where += ' AND ' + block_sql
+    params.extend(block_params)
     with sqlite3.connect(f'file:{DB}?mode=ro', uri=True, timeout=20) as c:
         c.row_factory = sqlite3.Row
         rows = [dict(row) for row in c.execute(

@@ -355,6 +355,75 @@ $('catpopSort').addEventListener('click', e => {
   renderCatPicker();
 });
 
+/* Filtro de conteúdo (categorias bloqueadas nas buscas do Jellyfin/StreamBox) */
+const cf = { auto: true, show: false, blocked: new Set(), allowed: new Set(), cats: [], view: 'all' };
+const cfIsBlocked = c => cf.blocked.has(c.raw) || (cf.auto && c.adult && !cf.allowed.has(c.raw));
+async function cfLoad() {
+  try {
+    const d = await api('/content-filter');
+    cf.auto = d.auto; cf.show = d.show_in_panel; cf.cats = d.categories || [];
+    cf.blocked = new Set(d.blocked); cf.allowed = new Set(d.allowed);
+    const n = d.blocked_count || 0;
+    $('cfBadge').textContent = n; $('cfBadge').classList.toggle('hidden', !n);
+  } catch { /* catálogo vazio */ }
+}
+async function openContentFilter() {
+  await cfLoad();
+  $('cfAuto').checked = cf.auto; $('cfPanel').checked = cf.show; $('cfSearch').value = '';
+  renderContentFilter();
+  $('cfpop').classList.remove('hidden');
+}
+function renderContentFilter() {
+  const q = $('cfSearch').value.trim().toLocaleLowerCase('pt-BR').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  let cats = cf.cats;
+  if (q) cats = cats.filter(c => c.name.toLocaleLowerCase('pt-BR').normalize('NFD').replace(/[\u0300-\u036f]/g, '').includes(q));
+  if (cf.view === 'blocked') cats = cats.filter(cfIsBlocked);
+  const list = $('cfList');
+  list.replaceChildren();
+  for (const c of cats.slice(0, 600)) {
+    const blk = cfIsBlocked(c);
+    const b = h('button', { class: 'cat-item' + (blk ? ' blk' : ''), type: 'button', title: c.name + (blk ? ' — bloqueada (clique para liberar)' : ' — clique para bloquear') },
+      h('span', { text: c.name }), h('small', {}, compact(c.count), c.adult && cf.auto ? h('em', { class: 'tag-auto', text: 'auto' }) : null));
+    b.addEventListener('click', () => {
+      if (cfIsBlocked(c)) { cf.blocked.delete(c.raw); if (cf.auto && c.adult) cf.allowed.add(c.raw); }
+      else { cf.allowed.delete(c.raw); if (!(cf.auto && c.adult)) cf.blocked.add(c.raw); }
+      renderContentFilter();
+    });
+    list.append(b);
+  }
+  if (!cats.length) list.append(h('div', { class: 'catpop-empty', text: cf.view === 'blocked' ? 'Nenhuma categoria bloqueada.' : 'Nenhuma categoria encontrada.' }));
+  const blocked = cf.cats.filter(cfIsBlocked);
+  $('cfSummary').textContent = blocked.length
+    ? `${fmt(blocked.length)} categoria(s) bloqueada(s) · ${fmt(blocked.reduce((a, c) => a + c.count, 0))} itens`
+    : 'Nada bloqueado';
+}
+$('cfBtn').addEventListener('click', openContentFilter);
+$('cfClose').addEventListener('click', () => $('cfpop').classList.add('hidden'));
+$('cfpop').addEventListener('click', e => { if (e.target === $('cfpop')) $('cfpop').classList.add('hidden'); });
+$('cfSearch').addEventListener('input', renderContentFilter);
+$('cfAuto').addEventListener('change', e => { cf.auto = e.target.checked; renderContentFilter(); });
+$('cfPanel').addEventListener('change', e => { cf.show = e.target.checked; });
+$('cfShow').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  cf.view = b.dataset.s;
+  $('cfShow').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+  renderContentFilter();
+});
+$('cfSave').addEventListener('click', async () => {
+  const btn = $('cfSave'); btn.disabled = true;
+  try {
+    await post('/content-filter', { auto: cf.auto, show_in_panel: cf.show, blocked: [...cf.blocked], allowed: [...cf.allowed] });
+    toast('Filtro de conteúdo salvo', 'ok');
+    $('cfpop').classList.add('hidden');
+    await cfLoad();
+    if (state.category && cf.cats.some(c => c.raw === state.category && cfIsBlocked(c)) && !cf.show) state.category = '';
+    await loadMeta();
+    renderCatalogChrome(); browse();
+  } catch (err) { toast(err.message, 'bad'); }
+  finally { btn.disabled = false; }
+});
+cfLoad();
+
 function skeletons(n = 12) {
   return Array.from({ length: n }, () => h('div', { class: 'card skeleton' },
     h('div', { class: 'poster' }), h('div', { class: 'sk', attrs: { 'aria-hidden': 'true' } }),

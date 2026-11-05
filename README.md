@@ -38,3 +38,14 @@ Copie novos arquivos `.m3u` ou `.m3u8` em `playlists/` e execute novamente o com
 - Títulos de episódios são identificados via `S01E02`; outros formatos e anos ausentes precisam de revisão.
 - `year` nos registros é extraído de nomes e pode faltar.
 - O volume `./` é montado como leitura; apenas `./data` é gravável.
+
+## Filtro de conteúdo (categorias bloqueadas)
+
+No painel, o botão **Filtro** (ícone de escudo) bloqueia categorias inteiras, por exemplo canais adultos:
+
+- **Bloqueio automático** (ligado por padrão) de categorias com nomes como *Adultos*, *XXX*, *+18*, *Hot* e *Erótico*. Clicar numa categoria detectada libera uma exceção.
+- **Bloqueio manual** de qualquer outra categoria.
+- O conteúdo bloqueado **não aparece** na busca/solicitação do Jellyfin (script `strm-solicitar.js`), do app StreamBox e do StreamBox Web, **não pode ser solicitado** e não é usado na importação de episódios.
+- No painel ele também fica oculto, a não ser que a opção *Mostrar o conteúdo bloqueado neste painel* esteja ligada.
+
+A configuração fica em `data/content_filter.json`.

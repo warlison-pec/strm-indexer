@@ -34,6 +34,7 @@ import catalog_enrich as enrich
 import jellyfin_meta as jellyfin
 import media_control as media
 import series_bulk as bulk
+import content_filter
 import live_relay
 from catalog_identity import key_for
 from indexer import DB as CATALOG, norm
@@ -267,21 +268,22 @@ def search(q):
     if len(q) < 2 or len(q) > 120:
         return {'items': []}
     n, like = norm(q), _like(q)
+    block_sql, block_params = content_filter.where()   # categorias bloqueadas (ex.: adultos)
     with sqlite3.connect(f'file:{CATALOG}?mode=ro', uri=True, timeout=15) as db:
         db.row_factory = sqlite3.Row
         movies = [dict(r) for r in db.execute(
             '''SELECT MIN(title) title, year, COUNT(*) sources, MIN(normalized) normalized FROM entries
-               WHERE kind='movie' AND normalized LIKE ? ESCAPE '\\'
+               WHERE kind='movie' AND normalized LIKE ? ESCAPE '\\' AND ''' + block_sql + '''
                GROUP BY normalized, COALESCE(year,-1)
                ORDER BY (MIN(normalized)=?) DESC, (MIN(normalized) LIKE ?) DESC, LENGTH(MIN(normalized)) LIMIT 40''',
-            (like, n, n.replace('%', '') + '%'))]
+            (like, *block_params, n, n.replace('%', '') + '%'))]
         series = [dict(r) for r in db.execute(
             '''SELECT MIN(title) title, MIN(normalized) normalized,
                       COUNT(DISTINCT season || 'x' || episode) episodes,
                       GROUP_CONCAT(DISTINCT season) seasons FROM entries
-               WHERE kind='episode' AND normalized LIKE ? ESCAPE '\\' AND season IS NOT NULL
+               WHERE kind='episode' AND normalized LIKE ? ESCAPE '\\' AND season IS NOT NULL AND ''' + block_sql + '''
                GROUP BY normalized
-               ORDER BY (normalized=?) DESC, LENGTH(normalized) LIMIT 20''', (like, n))]
+               ORDER BY (normalized=?) DESC, LENGTH(normalized) LIMIT 20''', (like, *block_params, n))]
     states = media.content_states([key_for('movie', m['title'], m['year']) for m in movies])
     with media.connect() as c:
         managed_eps = {}
@@ -355,8 +357,9 @@ def create(user, body):
         season = None
     normalized = norm(title)
     with sqlite3.connect(f'file:{CATALOG}?mode=ro', uri=True, timeout=10) as db:
-        exists = db.execute('SELECT 1 FROM entries WHERE kind=? AND normalized=? LIMIT 1',
-                            ('movie' if kind == 'movie' else 'episode', normalized)).fetchone()
+        block_sql, block_params = content_filter.where()
+        exists = db.execute('SELECT 1 FROM entries WHERE kind=? AND normalized=? AND ' + block_sql + ' LIMIT 1',
+                            ('movie' if kind == 'movie' else 'episode', normalized, *block_params)).fetchone()
     if not exists:
         raise ValueError('Título não encontrado no catálogo')
     now = time.time()
@@ -429,12 +432,13 @@ def _set(rid, **fields):
 
 def _process_movie(row):
     _set(row['id'], state='validating', message='Validando fontes…')
+    block_sql, block_params = content_filter.where()
     with sqlite3.connect(f'file:{CATALOG}?mode=ro', uri=True, timeout=15) as db:
         db.row_factory = sqlite3.Row
         ids = [r['id'] for r in db.execute(
             '''SELECT id FROM entries WHERE kind='movie' AND normalized=? AND (? IS NULL OR year IS NULL OR year=?)
-               ORDER BY (year IS ?) DESC, source_order, id LIMIT ?''',
-            (row['normalized'], row['year'], row['year'], row['year'], MAX_CANDIDATES))]
+               AND ''' + block_sql + ''' ORDER BY (year IS ?) DESC, source_order, id LIMIT ?''',
+            (row['normalized'], row['year'], row['year'], *block_params, row['year'], MAX_CANDIDATES))]
     if not ids:
         return _set(row['id'], state='unavailable', message='Título não está mais nas listas')
     reasons = []

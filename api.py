@@ -13,6 +13,7 @@ import catalog_enrich as enrich
 import metadata_auto as automatic
 import tvdb_meta as tvdb
 import jellyfin_bridge as bridge
+import content_filter
 from catalog_identity import key_for
 import os
 from pathlib import Path
@@ -55,6 +56,9 @@ def query_catalog(args):
                     raise ValueError('Parâmetro numérico fora do intervalo')
             conditions.append(column + ' = ?')
             params.append(val)
+    block_sql, block_params = content_filter.where(for_panel=True)
+    conditions.append(block_sql)
+    params.extend(block_params)
     where = ' AND '.join(conditions)
     with sqlite3.connect(f'file:{DB}?mode=ro', uri=True, timeout=10) as db:
         db.row_factory = sqlite3.Row
@@ -89,6 +93,9 @@ def browse(args):
     if source:
         conditions.append('source = ?')
         params.append(source)
+    block_sql, block_params = content_filter.where(for_panel=True)   # oculta categorias bloqueadas
+    conditions.append(block_sql)
+    params.extend(block_params)
     where = ' AND '.join(conditions)
     group = 'normalized, COALESCE(year, -1)' if kind == 'movie' else 'normalized'
     with sqlite3.connect(f'file:{DB}?mode=ro', uri=True, timeout=15) as db:
@@ -118,9 +125,12 @@ def browse(args):
 
 
 def filters():
+    blocked = content_filter.blocked_set()
+    hidden = set() if content_filter.load()['show_in_panel'] else blocked
     with sqlite3.connect(f'file:{DB}?mode=ro', uri=True, timeout=15) as db:
         categories = db.execute('SELECT category, COUNT(*) FROM entries GROUP BY category ORDER BY COUNT(*) DESC')
-        cats = [{'name': name or 'Sem categoria', 'count': count} for name, count in categories]
+        cats = [{'name': name or 'Sem categoria', 'count': count, 'blocked': (name or '') in blocked}
+                for name, count in categories if (name or '') not in hidden]
         sources = db.execute('SELECT source, COUNT(*) FROM entries GROUP BY source ORDER BY source')
         srcs = [{'name': name, 'count': count} for name, count in sources]
     return {'categories': cats, 'sources': srcs}
@@ -255,6 +265,12 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlsplit(self.path)
         if parsed.path.startswith(('/jf/', '/strm-api/')):
             return bridge.handle(self, 'POST', parsed)
+        if parsed.path == '/content-filter':
+            if not self.guard(mutable=True): return
+            try:
+                return self.send_json(200, content_filter.save(self._json_body(262144)))
+            except (ValueError, TypeError, json.JSONDecodeError, OSError) as exc:
+                return self.send_json(400, {'error': str(exc)})
         if parsed.path == '/requests/retry':
             if not self.guard(mutable=True): return
             try:
@@ -402,6 +418,9 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == '/requests':
             if not self.guard(): return
             return self.send_json(200, bridge.admin_list())
+        if parsed.path == '/content-filter':
+            if not self.guard(): return
+            return self.send_json(200, content_filter.status())
         static = {'/': ('index.html','text/html; charset=utf-8'),
                   '/index.html': ('index.html','text/html; charset=utf-8'),
                   '/app.css': ('app.css','text/css; charset=utf-8'),

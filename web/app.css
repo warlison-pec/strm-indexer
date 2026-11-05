@@ -471,3 +471,15 @@ input[type=url]:focus,input[type=text]:focus{border-color:rgba(139,124,255,.55);
 
 .req-meta{display:flex;gap:10px;flex-wrap:wrap;color:var(--muted);font-size:12px;margin-top:3px}
 .req-msg{font-size:12.5px;color:var(--text2);margin-top:3px}
+
+/* Filtro de conteúdo */
+.cf-badge{margin-left:2px;min-width:20px;height:20px;padding:0 6px;border-radius:10px;background:#ff4d6a;color:#fff;font-size:11px;font-weight:700;display:inline-grid;place-items:center}
+.cf-note{margin:0;color:var(--text2);font-size:13.5px;line-height:1.5}
+.cf-toggle{display:flex;gap:12px;align-items:flex-start;padding:12px 14px;border-radius:12px;background:var(--bg2);border:1px solid var(--line);cursor:pointer}
+.cf-toggle input{width:18px;height:18px;margin-top:2px;accent-color:#ff4d6a;flex:none}
+.cf-toggle b{display:block;font-size:14px}
+.cf-toggle small{display:block;color:var(--muted);font-size:12.5px;margin-top:2px}
+.cat-item.blk{border-color:rgba(255,77,106,.55);background:rgba(255,77,106,.1);color:#fff}
+.cat-item.blk span::before{content:"⛔ ";}
+.cat-item .tag-auto{font-size:10.5px;color:#ff8da0;margin-left:6px}
+.cf-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-top:4px}

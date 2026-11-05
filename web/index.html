@@ -101,6 +101,7 @@
           <button class="chip-arrow right hidden" id="chipsNext" type="button" aria-label="Mais categorias"><svg><use href="#i-right"/></svg></button>
         </div>
         <button class="btn" id="allCats" type="button"><svg><use href="#i-layers"/></svg><span id="allCatsLabel">Categorias</span></button>
+        <button class="btn" id="cfBtn" type="button" title="Bloquear categorias (ex.: adultos) nas buscas do Jellyfin e do StreamBox"><svg><use href="#i-shield"/></svg><span>Filtro</span><small class="cf-badge hidden" id="cfBadge"></small></button>
         <div class="toolbar-right">
           <div class="select"><select id="source" aria-label="Lista"><option value="">Todas as listas</option></select><svg><use href="#i-chev"/></svg></div>
           <button class="btn ghost hidden" id="clear" type="button"><svg><use href="#i-x"/></svg>Limpar</button>
@@ -215,6 +216,22 @@
     <h3 id="dlgTitle"></h3>
     <p id="dlgText"></p>
     <div class="dialog-actions"><button class="btn ghost" id="dlgCancel" type="button">Cancelar</button><button class="btn primary" id="dlgOk" type="button">Confirmar</button></div>
+  </div>
+</div>
+
+<div class="catpop-wrap hidden" id="cfpop" role="dialog" aria-modal="true" aria-labelledby="cfTitle">
+  <div class="catpop">
+    <div class="catpop-head">
+      <h3 id="cfTitle">Filtro de conteúdo</h3>
+      <button class="icon-btn" id="cfClose" type="button" aria-label="Fechar"><svg><use href="#i-x"/></svg></button>
+    </div>
+    <p class="cf-note">Categorias bloqueadas não aparecem na busca do Jellyfin, do app StreamBox e do StreamBox Web, e não podem ser solicitadas nem importadas por lá.</p>
+    <label class="cf-toggle"><input type="checkbox" id="cfAuto"><span><b>Bloquear categorias adultas automaticamente</b><small>Nomes como Adultos, XXX, +18, Hot, Erótico. Clique numa categoria para liberar uma exceção.</small></span></label>
+    <label class="cf-toggle"><input type="checkbox" id="cfPanel"><span><b>Mostrar o conteúdo bloqueado neste painel</b><small>Só para administradores; o bloqueio continua valendo para o Jellyfin e os apps.</small></span></label>
+    <label class="mini-search"><svg><use href="#i-search"/></svg><input id="cfSearch" placeholder="Filtrar categorias…" autocomplete="off"></label>
+    <div class="catpop-sort segmented" id="cfShow"><button type="button" data-s="all" class="on">Todas</button><button type="button" data-s="blocked">Bloqueadas</button></div>
+    <div class="catpop-list" id="cfList"></div>
+    <div class="cf-foot"><span id="cfSummary" class="muted"></span><button class="btn primary" id="cfSave" type="button"><svg><use href="#i-check"/></svg>Salvar</button></div>
   </div>
 </div>
 
