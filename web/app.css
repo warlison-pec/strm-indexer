@@ -483,3 +483,52 @@ input[type=url]:focus,input[type=text]:focus{border-color:rgba(139,124,255,.55);
 .cat-item.blk span::before{content:"⛔ ";}
 .cat-item .tag-auto{font-size:10.5px;color:#ff8da0;margin-left:6px}
 .cf-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-top:4px}
+
+/* Canais ao vivo */
+.ch-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start}
+.ch-col{display:flex;flex-direction:column;min-height:0;height:min(72vh,820px)}
+.ch-col .panel-head small{font-weight:500;font-size:12.5px}
+.ch-filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.ch-filters .mini-search{flex:1 1 180px;height:40px;min-width:0}
+.ch-filters .select{flex:1 1 150px;min-width:0}
+.ch-filters .select select{width:100%}
+.ch-actions{display:flex;gap:6px;flex-wrap:wrap}
+.btn.sm{height:34px;padding:0 11px;font-size:12.5px}
+.btn.sm svg{width:15px;height:15px}
+.ch-list{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:4px;padding-right:4px;scrollbar-width:thin}
+.ch-row{display:flex;align-items:center;gap:10px;padding:7px 9px;border-radius:11px;background:var(--bg2);border:1px solid var(--line);transition:border-color .15s,background .15s}
+.ch-row:hover{border-color:var(--line2)}
+.ch-row.dragging{opacity:.4}
+.ch-row.drop{border-color:var(--accent2);box-shadow:0 -2px 0 var(--accent2) inset}
+.ch-logo{width:54px;height:34px;flex:none;border-radius:7px;background:#0b0e15;display:grid;place-items:center;overflow:hidden;color:var(--muted);font-size:11px;font-weight:700}
+.ch-logo img{width:100%;height:100%;object-fit:contain}
+.ch-name{flex:1;min-width:0;display:flex;flex-direction:column}
+.ch-name b{font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ch-name small{color:var(--muted);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ch-name input{height:28px;border-radius:7px;border:1px solid var(--line2);background:var(--surface);color:#fff;padding:0 8px;font:inherit;font-size:13px}
+.ch-num{width:52px;height:30px;flex:none;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:#fff;text-align:center;font:inherit;font-size:12.5px}
+.ch-grip{cursor:grab;color:var(--muted);display:grid;place-items:center;flex:none}
+.ch-grip svg{width:16px;height:16px}
+.ch-ico{width:32px;height:32px;flex:none;border-radius:9px;border:1px solid var(--line);background:var(--surface);color:var(--text2);display:grid;place-items:center;cursor:pointer}
+.ch-ico:hover{color:#fff;border-color:var(--line2)}
+.ch-ico svg{width:15px;height:15px}
+.ch-ico.add{color:var(--accent2)}
+.ch-ico.done{color:#34c77b;cursor:default}
+.ch-st{flex:none;font-size:11px;font-weight:700;padding:3px 8px;border-radius:20px;background:#262b38;color:var(--text2)}
+.ch-st.ok{background:rgba(52,199,123,.15);color:#34c77b}
+.ch-st.fail{background:rgba(255,77,106,.15);color:#ff6b82}
+.ch-st.testing{background:rgba(139,124,255,.18);color:#b9adff}
+.ch-more{margin-top:10px;align-self:center}
+.ch-empty{color:var(--muted);text-align:center;padding:30px 10px;font-size:13.5px}
+.ch-progress{position:relative;height:28px;border-radius:9px;background:var(--bg2);border:1px solid var(--line);overflow:hidden;margin-bottom:10px}
+.ch-progress i{position:absolute;inset:0 auto 0 0;background:var(--grad);opacity:.35;transition:width .4s}
+.ch-progress span{position:relative;display:block;line-height:26px;padding:0 10px;font-size:12.5px}
+.ch-out{margin-top:18px}
+.ch-url{display:flex;gap:8px;flex-wrap:wrap}
+.ch-url input{flex:1 1 320px;height:42px;border-radius:11px;border:1px solid var(--line2);background:var(--bg2);color:#fff;padding:0 12px;font:13px ui-monospace,monospace}
+.ch-hint{font-size:12.5px;margin:10px 0 14px;line-height:1.5}
+.ch-settings{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:end}
+.field-inline{display:flex;flex-direction:column;gap:6px;font-size:13px;color:var(--text2)}
+.field-inline input{height:42px;border-radius:11px;border:1px solid var(--line2);background:var(--bg2);color:#fff;padding:0 12px;font:inherit}
+.ch-settings .ch-actions{grid-column:1/-1}
+@media (max-width:1100px){.ch-grid{grid-template-columns:1fr}.ch-col{height:auto;max-height:70vh}.ch-settings{grid-template-columns:1fr}}

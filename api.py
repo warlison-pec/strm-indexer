@@ -14,6 +14,7 @@ import metadata_auto as automatic
 import tvdb_meta as tvdb
 import jellyfin_bridge as bridge
 import content_filter
+import channels
 from catalog_identity import key_for
 import os
 from pathlib import Path
@@ -265,6 +266,29 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlsplit(self.path)
         if parsed.path.startswith(('/jf/', '/strm-api/')):
             return bridge.handle(self, 'POST', parsed)
+        if parsed.path.startswith('/channels/'):
+            if not self.guard(mutable=True): return
+            try:
+                d = self._json_body(1048576)
+                if parsed.path == '/channels/add':
+                    r = channels.add(d.get('ids'), d.get('q', ''), d.get('group', ''), d.get('source', ''))
+                elif parsed.path == '/channels/remove':
+                    r = channels.remove(d.get('ids'), bool(d.get('failed')))
+                elif parsed.path == '/channels/update':
+                    r = channels.update(d.get('id'), d.get('name'), d.get('group'), d.get('number'))
+                elif parsed.path == '/channels/reorder':
+                    r = channels.reorder(d.get('ids'))
+                elif parsed.path == '/channels/renumber':
+                    r = channels.renumber(d.get('start', 1))
+                elif parsed.path == '/channels/settings':
+                    r = channels.save_settings(d.get('epg_url'), d.get('only_ok'), bool(d.get('new_token')))
+                elif parsed.path == '/channels/test':
+                    r = channels.start_test(d.get('ids'), bool(d.get('only_untested')))
+                else:
+                    return self.send_json(404, {'error': 'Rota não encontrada'})
+                return self.send_json(200, r)
+            except (ValueError, TypeError, json.JSONDecodeError, OSError, sqlite3.Error) as exc:
+                return self.send_json(400, {'error': str(exc)})
         if parsed.path == '/content-filter':
             if not self.guard(mutable=True): return
             try:
@@ -411,10 +435,56 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def send_m3u(self, text):
+        data = text.encode('utf-8')
+        self.send_response(200)
+        self.send_header('Content-Type', 'audio/x-mpegurl; charset=utf-8')
+        self.send_header('Content-Disposition', 'inline; filename="canais.m3u"')
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Content-Length', str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     def do_GET(self):
         parsed = urlsplit(self.path)
+        # Lista de canais gerada: pública, protegida pela chave na URL (?t=...)
+        if parsed.path in ('/channels/list.m3u', '/strm-api/channels.m3u', '/jf/channels.m3u'):
+            text = channels.playlist(parse_qs(parsed.query).get('t', [''])[0])
+            return self.send_m3u(text) if text is not None else self.send_json(403, {'error': 'Chave inválida'})
         if parsed.path.startswith(('/jf/', '/strm-api/')):
             return bridge.handle(self, 'GET', parsed)
+        if parsed.path.startswith('/channels/'):
+            if not self.guard(): return
+            args = parse_qs(parsed.query)
+            arg = lambda k, d='': args.get(k, [d])[0]
+            try:
+                if parsed.path == '/channels/all':
+                    return self.send_json(200, channels.browse(arg('q').strip()[:200], arg('group')[:200], arg('source')[:200],
+                                                              max(1, min(10000, int(arg('page', '1')))), max(1, min(200, int(arg('limit', '60'))))))
+                if parsed.path == '/channels/facets':
+                    return self.send_json(200, channels.facets(arg('source')[:200]))
+                if parsed.path == '/channels/selected':
+                    return self.send_json(200, channels.selected())
+                if parsed.path == '/channels/test':
+                    return self.send_json(200, channels.test_status())
+                if parsed.path.startswith('/channels/logo/'):
+                    found = channels.logo(parsed.path.rsplit('/', 1)[-1])
+                    if not found:
+                        return self.send_json(404, {'error': 'Sem logo'})
+                    data, typ = found
+                    self.send_response(200)
+                    self.send_header('Content-Type', typ)
+                    self.send_header('Content-Length', str(len(data)))
+                    self.send_header('Cache-Control', 'private, max-age=604800')
+                    if typ == 'image/svg+xml':
+                        self.send_header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'")
+                    self.send_header('X-Content-Type-Options', 'nosniff')
+                    self.end_headers()
+                    return self.wfile.write(data)
+            except (ValueError, OSError, sqlite3.Error) as exc:
+                return self.send_json(400, {'error': str(exc)})
+            return self.send_json(404, {'error': 'Rota não encontrada'})
         if parsed.path == '/requests':
             if not self.guard(): return
             return self.send_json(200, bridge.admin_list())

@@ -34,6 +34,9 @@
   <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4l9 16H3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M12 10v4.5M12 17.2v.3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
   <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="9" cy="10" r="2" fill="currentColor"/><path d="M4 18l5-5 4 4 3-3 4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
   <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2.5h8a2 2 0 012 2V17a2 2 0 01-2 2H5a2 2 0 01-2-2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+  <symbol id="i-antenna" viewBox="0 0 24 24"><path d="M4.9 4.9a10 10 0 000 14.2M19.1 4.9a10 10 0 010 14.2M7.8 7.8a6 6 0 000 8.4M16.2 7.8a6 6 0 010 8.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="12" r="2" fill="currentColor"/></symbol>
+  <symbol id="i-grip" viewBox="0 0 24 24"><g fill="currentColor"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></g></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M16 8V6a2 2 0 00-2-2H6a2 2 0 00-2 2v8a2 2 0 002 2h2" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
   <symbol id="i-chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
 </svg>
 
@@ -50,6 +53,7 @@
       <span class="nav-label">Gerenciamento</span>
       <a class="nav-item" href="#/gerenciados" data-view="managed"><svg><use href="#i-shield"/></svg><span>Gerenciados</span><b id="alertBadge" class="badge hidden"></b></a>
       <a class="nav-item" href="#/solicitacoes" data-view="requests"><svg><use href="#i-bell"/></svg><span>Solicitações</span><b id="reqBadge" class="badge info hidden"></b></a>
+      <a class="nav-item" href="#/canais" data-view="channels"><svg><use href="#i-antenna"/></svg><span>Canais</span><em id="navChannels"></em></a>
       <a class="nav-item" href="#/listas" data-view="sources"><svg><use href="#i-list"/></svg><span>Listas e fontes</span></a>
     </nav>
     <div class="sidebar-foot">
@@ -154,6 +158,49 @@
       <div class="panel"><div id="requestList" class="managed-list"></div></div>
     </section>
 
+    <!-- Canais ao vivo -->
+    <section class="view hidden" id="viewChannels">
+      <div class="page-head">
+        <div><span class="eyebrow">TV ao vivo</span><h1>Canais</h1><p>Escolha canais das suas listas, teste e gere uma lista M3U só com os que funcionam, para a TV ao vivo do Jellyfin, o StreamBox ou qualquer player.</p></div>
+      </div>
+      <div class="ch-grid">
+        <div class="panel ch-col">
+          <div class="panel-head"><h3><svg><use href="#i-list"/></svg>Disponíveis <small id="chAvailCount" class="muted"></small></h3>
+            <button class="btn sm" id="chAddAll" type="button"><svg><use href="#i-plus"/></svg><span>Adicionar filtrados</span></button></div>
+          <div class="ch-filters">
+            <label class="mini-search"><svg><use href="#i-search"/></svg><input id="chQ" placeholder="Buscar canal…" autocomplete="off"></label>
+            <div class="select"><select id="chSource" aria-label="Lista"><option value="">Todas as listas</option></select><svg><use href="#i-chev"/></svg></div>
+            <div class="select"><select id="chGroup" aria-label="Grupo"><option value="">Todos os grupos</option></select><svg><use href="#i-chev"/></svg></div>
+          </div>
+          <div class="ch-list" id="chAvail"></div>
+          <button class="btn ghost ch-more hidden" id="chMore" type="button">Carregar mais</button>
+        </div>
+        <div class="panel ch-col">
+          <div class="panel-head"><h3><svg><use href="#i-antenna"/></svg>Minha lista <small id="chSelCount" class="muted"></small></h3>
+            <div class="ch-actions">
+              <button class="btn sm" id="chTestAll" type="button"><svg><use href="#i-check"/></svg>Testar todos</button>
+              <button class="btn sm ghost" id="chTestNew" type="button">Testar novos</button>
+              <button class="btn sm ghost" id="chRenumber" type="button">Numerar</button>
+              <button class="btn sm ghost" id="chDropFailed" type="button"><svg><use href="#i-trash"/></svg>Remover com falha</button>
+            </div></div>
+          <div class="ch-progress hidden" id="chProgress"><i></i><span></span></div>
+          <div class="ch-filters"><label class="mini-search"><svg><use href="#i-search"/></svg><input id="chSelQ" placeholder="Filtrar minha lista…" autocomplete="off"></label>
+            <div class="segmented" id="chSelShow"><button type="button" data-s="all" class="on">Todos</button><button type="button" data-s="ok">OK</button><button type="button" data-s="fail">Falha</button><button type="button" data-s="untested">Novos</button></div></div>
+          <div class="ch-list" id="chSel"></div>
+        </div>
+      </div>
+      <div class="panel ch-out">
+        <div class="panel-head"><h3><svg><use href="#i-file"/></svg>Lista gerada</h3></div>
+        <div class="ch-url"><input id="chUrl" readonly><button class="btn" id="chCopy" type="button"><svg><use href="#i-copy"/></svg>Copiar</button><a class="btn ghost" id="chDownload" download="canais.m3u">Baixar .m3u</a></div>
+        <p class="muted ch-hint">Use este endereço como sintonizador M3U na TV ao vivo do Jellyfin (Painel → TV ao vivo → Adicionar sintonizador → M3U) ou em "Minha lista" do StreamBox. Quem tiver o link consegue ver a lista: gere uma nova chave se ele vazar.</p>
+        <div class="ch-settings">
+          <label class="field-inline">Guia de programação (EPG / XMLTV)<input id="chEpg" placeholder="https://… (opcional)" autocomplete="off"></label>
+          <label class="cf-toggle"><input type="checkbox" id="chOnlyOk"><span><b>Incluir só canais testados e funcionando</b><small>Canais novos ou com falha ficam de fora até passarem no teste.</small></span></label>
+          <div class="ch-actions"><button class="btn primary" id="chSaveSettings" type="button"><svg><use href="#i-check"/></svg>Salvar</button><button class="btn ghost" id="chNewToken" type="button"><svg><use href="#i-refresh"/></svg>Gerar nova chave</button></div>
+        </div>
+      </div>
+    </section>
+
     <!-- Listas -->
     <section class="view hidden" id="viewSources">
       <div class="page-head">
@@ -186,6 +233,7 @@
     <a href="#/series" data-view="episode"><svg><use href="#i-tv"/></svg>Séries</a>
     <a href="#/gerenciados" data-view="managed"><svg><use href="#i-shield"/></svg>Gerenciados</a>
     <a href="#/solicitacoes" data-view="requests"><svg><use href="#i-bell"/></svg>Pedidos</a>
+    <a href="#/canais" data-view="channels"><svg><use href="#i-antenna"/></svg>Canais</a>
     <a href="#/listas" data-view="sources"><svg><use href="#i-list"/></svg>Listas</a>
   </nav>
 </div>

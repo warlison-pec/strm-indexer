@@ -160,7 +160,7 @@ $('logout').addEventListener('click', async () => {
 });
 
 /* ============================== Roteamento ============================== */
-const ROUTES = { '#/filmes': 'movie', '#/series': 'episode', '#/gerenciados': 'managed', '#/solicitacoes': 'requests', '#/listas': 'sources' };
+const ROUTES = { '#/filmes': 'movie', '#/series': 'episode', '#/gerenciados': 'managed', '#/solicitacoes': 'requests', '#/canais': 'channels', '#/listas': 'sources' };
 function route() {
   const view = ROUTES[location.hash] || 'movie';
   const changedType = view !== state.view;
@@ -171,6 +171,7 @@ function route() {
   $('viewManaged').classList.toggle('hidden', view !== 'managed');
   $('viewSources').classList.toggle('hidden', view !== 'sources');
   $('viewRequests').classList.toggle('hidden', view !== 'requests');
+  $('viewChannels').classList.toggle('hidden', view !== 'channels');
   clearInterval(timers.playlist);
   clearInterval(timers.requests);
   if (catalog) {
@@ -179,6 +180,7 @@ function route() {
     browse();
   } else if (view === 'managed') loadManaged();
   else if (view === 'requests') { loadRequests(); timers.requests = setInterval(() => { if (!document.hidden) loadRequests(true); }, 5000); }
+  else if (view === 'channels') loadChannels();
   else loadSources();
   window.scrollTo({ top: 0 });
 }
@@ -423,6 +425,184 @@ $('cfSave').addEventListener('click', async () => {
   finally { btn.disabled = false; }
 });
 cfLoad();
+
+/* ============================== Canais ao vivo ============================== */
+const ch = { page: 1, total: 0, avail: [], sel: [], token: '', settings: {}, show: 'all', facetsFor: null, testTimer: 0, dragId: null };
+const chArgs = () => ({ q: $('chQ').value.trim(), group: $('chGroup').value, source: $('chSource').value });
+function chLogo(id, hasLogo, name) {
+  const box = h('span', { class: 'ch-logo', text: (name || '?').replace(/[^\p{L}\p{N}]/gu, '').slice(0, 3).toUpperCase() });
+  if (hasLogo) {
+    // o indexador baixa e guarda o logo (o painel não carrega imagens de outros sites)
+    const img = h('img', { alt: '', decoding: 'async' });
+    img.onload = () => { box.textContent = ''; box.append(img); };
+    img.src = '/channels/logo/' + id;   // carrega fora da página e só entra quando pronto
+  }
+  return box;
+}
+async function loadChannels() {
+  await Promise.all([chFacets(), chBrowse(true), chLoadSelected()]);
+}
+async function chFacets() {
+  const src = $('chSource').value;
+  if (ch.facetsFor === src) return;
+  try {
+    const f = await api('/channels/facets', { params: { source: src } });
+    ch.facetsFor = src;
+    const keep = $('chGroup').value;
+    $('chGroup').replaceChildren(h('option', { value: '', text: 'Todos os grupos' }),
+      ...f.groups.map(g => h('option', { value: g.name, text: `${g.name || 'Sem grupo'} (${fmt(g.count)})` })));
+    $('chGroup').value = f.groups.some(g => g.name === keep) ? keep : '';
+    if ($('chSource').options.length <= 1) $('chSource').append(...f.sources.map(s => h('option', { value: s.name, text: `${s.name} (${fmt(s.count)})` })));
+    $('navChannels').textContent = f.total ? compact(f.total) : '';
+  } catch (e) { toast(e.message, 'bad'); }
+}
+async function chBrowse(reset = false) {
+  if (reset) { ch.page = 1; ch.avail = []; }
+  try {
+    const r = await api('/channels/all', { params: { ...chArgs(), page: ch.page, limit: 80 } });
+    ch.total = r.total; ch.avail = reset ? r.items : ch.avail.concat(r.items);
+    renderAvail();
+  } catch (e) { $('chAvail').replaceChildren(h('div', { class: 'ch-empty', text: e.message })); }
+}
+function renderAvail() {
+  const list = $('chAvail');
+  list.replaceChildren();
+  $('chAvailCount').textContent = fmt(ch.total);
+  const chosen = new Set(ch.sel.map(x => x.id));
+  for (const c of ch.avail) {
+    const on = chosen.has(c.id) || c.selected;
+    const btn = h('button', { class: 'ch-ico ' + (on ? 'done' : 'add'), type: 'button', title: on ? 'Já está na sua lista' : 'Adicionar à minha lista' }, icon(on ? 'check' : 'plus'));
+    if (!on) btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      try { await post('/channels/add', { ids: [c.id] }); c.selected = true; await chLoadSelected(); } catch (e) { toast(e.message, 'bad'); btn.disabled = false; }
+    });
+    list.append(h('div', { class: 'ch-row' }, chLogo(c.id, !!c.logo, c.name),
+      h('span', { class: 'ch-name' }, h('b', { text: c.name, title: c.name }), h('small', { text: (c.group || 'Sem grupo') + ' · ' + c.source })), btn));
+  }
+  if (!ch.avail.length) list.append(h('div', { class: 'ch-empty', text: 'Nenhum canal ao vivo encontrado com esse filtro.' }));
+  $('chMore').classList.toggle('hidden', ch.avail.length >= ch.total);
+  $('chAddAll').disabled = !ch.total || !(chArgs().q || chArgs().group || chArgs().source);
+  $('chAddAll').querySelector('span').textContent = ch.total ? `Adicionar ${fmt(ch.total)} filtrados` : 'Adicionar filtrados';
+}
+async function chLoadSelected() {
+  try {
+    const r = await api('/channels/selected');
+    ch.sel = r.items; ch.token = r.token; ch.settings = r.settings;
+    renderSelected(); renderAvail(); renderOutput(); chTestProgress(r.test);
+  } catch (e) { toast(e.message, 'bad'); }
+}
+const ST = { ok: ['ok', 'OK'], fail: ['fail', 'Falha'], untested: ['', 'Novo'] };
+function renderSelected() {
+  const list = $('chSel');
+  list.replaceChildren();
+  const q = $('chSelQ').value.trim().toLocaleLowerCase('pt-BR');
+  const items = ch.sel.filter(x => (ch.show === 'all' || x.status === ch.show) && (!q || (x.name + ' ' + x.group_title).toLocaleLowerCase('pt-BR').includes(q)));
+  const counts = { ok: 0, fail: 0 }; ch.sel.forEach(x => { if (counts[x.status] !== undefined) counts[x.status]++; });
+  $('chSelCount').textContent = `${fmt(ch.sel.length)} · ${fmt(counts.ok)} ok · ${fmt(counts.fail)} com falha`;
+  const canDrag = ch.show === 'all' && !q;
+  for (const x of items) {
+    const [cls, label] = ST[x.status] || ST.untested;
+    const num = h('input', { class: 'ch-num', type: 'number', min: 0, value: x.number ?? '', title: 'Número do canal', placeholder: '#' });
+    num.addEventListener('change', () => post('/channels/update', { id: x.id, number: num.value }).then(() => (x.number = num.value === '' ? null : +num.value)).catch(e => toast(e.message, 'bad')));
+    const name = h('span', { class: 'ch-name', title: 'Clique para editar nome e grupo' }, h('b', { text: x.name }), h('small', { text: x.group_title || 'Sem grupo' }));
+    name.addEventListener('click', () => chEdit(x, name));
+    const st = h('span', { class: 'ch-st ' + cls, text: label, title: x.detail || (x.status === 'untested' ? 'Ainda não testado' : '') });
+    const test = h('button', { class: 'ch-ico', type: 'button', title: 'Testar este canal' }, icon('refresh'));
+    test.addEventListener('click', async () => { st.className = 'ch-st testing'; st.textContent = '…'; await post('/channels/test', { ids: [x.id] }).catch(e => toast(e.message, 'bad')); chWatchTest(); });
+    const del = h('button', { class: 'ch-ico', type: 'button', title: 'Remover da lista' }, icon('trash'));
+    del.addEventListener('click', async () => { await post('/channels/remove', { ids: [x.id] }).catch(e => toast(e.message, 'bad')); ch.sel = ch.sel.filter(y => y.id !== x.id); renderSelected(); renderAvail(); });
+    const row = h('div', { class: 'ch-row', data: { id: x.id } },
+      canDrag ? h('span', { class: 'ch-grip', title: 'Arraste para reordenar' }, icon('grip')) : null,
+      num, chLogo(x.id, !!x.logo, x.name), name, st, test, del);
+    if (canDrag) {
+      row.draggable = true;
+      row.addEventListener('dragstart', e => { ch.dragId = x.id; row.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; });
+      row.addEventListener('dragend', () => { row.classList.remove('dragging'); list.querySelectorAll('.drop').forEach(r => r.classList.remove('drop')); });
+      row.addEventListener('dragover', e => { e.preventDefault(); row.classList.add('drop'); });
+      row.addEventListener('dragleave', () => row.classList.remove('drop'));
+      row.addEventListener('drop', e => { e.preventDefault(); row.classList.remove('drop'); chMove(ch.dragId, x.id); });
+    }
+    list.append(row);
+  }
+  if (!items.length) list.append(h('div', { class: 'ch-empty', text: ch.sel.length ? 'Nenhum canal neste filtro.' : 'Sua lista está vazia. Adicione canais pelo painel ao lado.' }));
+}
+async function chMove(fromId, toId) {
+  if (!fromId || fromId === toId) return;
+  const from = ch.sel.findIndex(x => x.id === fromId), to = ch.sel.findIndex(x => x.id === toId);
+  if (from < 0 || to < 0) return;
+  const [it] = ch.sel.splice(from, 1); ch.sel.splice(to, 0, it);
+  renderSelected();
+  await post('/channels/reorder', { ids: ch.sel.map(x => x.id) }).catch(e => toast(e.message, 'bad'));
+}
+function chEdit(x, el) {
+  if (el.querySelector('input')) return;
+  const n = h('input', { value: x.name, attrs: { 'aria-label': 'Nome' } }), g = h('input', { value: x.group_title, placeholder: 'Grupo', attrs: { 'aria-label': 'Grupo' } });
+  el.replaceChildren(n, g); n.focus();
+  const save = async () => {
+    if (document.activeElement === n || document.activeElement === g) return;
+    try { await post('/channels/update', { id: x.id, name: n.value, group: g.value }); x.name = n.value.trim() || x.name; x.group_title = g.value.trim(); }
+    catch (e) { toast(e.message, 'bad'); }
+    renderSelected();
+  };
+  [n, g].forEach(i => { i.addEventListener('blur', () => setTimeout(save, 50)); i.addEventListener('keydown', e => { if (e.key === 'Enter') i.blur(); if (e.key === 'Escape') renderSelected(); }); });
+}
+function chTestProgress(t) {
+  const bar = $('chProgress');
+  if (!t || (!t.running && !t.total)) { bar.classList.add('hidden'); return; }
+  bar.classList.remove('hidden');
+  bar.querySelector('i').style.width = (t.total ? (t.done / t.total) * 100 : 0) + '%';
+  bar.querySelector('span').textContent = t.running ? `Testando ${fmt(t.done)} de ${fmt(t.total)} · ${fmt(t.ok)} ok · ${fmt(t.fail)} com falha` : `Último teste: ${fmt(t.ok)} ok · ${fmt(t.fail)} com falha`;
+}
+function chWatchTest() {
+  clearInterval(ch.testTimer);
+  ch.testTimer = setInterval(async () => {
+    const t = await api('/channels/test').catch(() => null);
+    chTestProgress(t);
+    if (!t || !t.running) { clearInterval(ch.testTimer); chLoadSelected(); }
+  }, 1500);
+}
+function renderOutput() {
+  // /strm-api/ é o caminho que o túnel publica; também funciona direto no servidor
+  const url = `${location.origin}/strm-api/channels.m3u?t=${encodeURIComponent(ch.token)}`;
+  $('chUrl').value = url; $('chDownload').href = url;
+  if (document.activeElement !== $('chEpg')) $('chEpg').value = ch.settings.epg_url || '';
+  $('chOnlyOk').checked = !!ch.settings.only_ok;
+}
+let chTyping;
+$('chQ').addEventListener('input', () => { clearTimeout(chTyping); chTyping = setTimeout(() => chBrowse(true), 250); });
+$('chSource').addEventListener('change', async () => { await chFacets(); chBrowse(true); });
+$('chGroup').addEventListener('change', () => chBrowse(true));
+$('chMore').addEventListener('click', () => { ch.page++; chBrowse(); });
+$('chAddAll').addEventListener('click', async () => {
+  if (!confirmAdd()) return;
+  try { const r = await post('/channels/add', chArgs()); toast(`${fmt(r.added)} canal(is) adicionado(s)` + (r.limit_reached ? ' · limite atingido' : ''), 'ok'); await chLoadSelected(); chBrowse(true); }
+  catch (e) { toast(e.message, 'bad'); }
+});
+function confirmAdd() { return ch.total <= 300 || window.confirm(`Adicionar ${fmt(ch.total)} canais de uma vez?`); }
+$('chSelQ').addEventListener('input', renderSelected);
+$('chSelShow').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  ch.show = b.dataset.s; $('chSelShow').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); renderSelected();
+});
+$('chTestAll').addEventListener('click', async () => { await post('/channels/test', {}).catch(e => toast(e.message, 'bad')); chWatchTest(); });
+$('chTestNew').addEventListener('click', async () => { await post('/channels/test', { only_untested: true }).catch(e => toast(e.message, 'bad')); chWatchTest(); });
+$('chRenumber').addEventListener('click', async () => { await post('/channels/renumber', { start: 1 }).catch(e => toast(e.message, 'bad')); chLoadSelected(); });
+$('chDropFailed').addEventListener('click', async () => {
+  try { const r = await post('/channels/remove', { failed: true }); toast(`${fmt(r.removed)} canal(is) removido(s)`, 'ok'); chLoadSelected(); } catch (e) { toast(e.message, 'bad'); }
+});
+$('chCopy').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText($('chUrl').value); toast('Endereço copiado', 'ok'); }
+  catch { $('chUrl').select(); document.execCommand('copy'); toast('Endereço copiado', 'ok'); }
+});
+$('chSaveSettings').addEventListener('click', async () => {
+  try { const r = await post('/channels/settings', { epg_url: $('chEpg').value, only_ok: $('chOnlyOk').checked }); ch.settings = r.settings; toast('Configuração salva', 'ok'); }
+  catch (e) { toast(e.message, 'bad'); }
+});
+$('chNewToken').addEventListener('click', async () => {
+  if (!window.confirm('Gerar uma nova chave? O endereço antigo da lista para de funcionar.')) return;
+  try { const r = await post('/channels/settings', { new_token: true }); ch.token = r.token; renderOutput(); toast('Nova chave gerada: atualize o endereço no Jellyfin e nos apps', 'ok', 6000); }
+  catch (e) { toast(e.message, 'bad'); }
+});
 
 function skeletons(n = 12) {
   return Array.from({ length: n }, () => h('div', { class: 'card skeleton' },

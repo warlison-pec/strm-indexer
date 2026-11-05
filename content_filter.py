@@ -83,6 +83,13 @@ def _categories():
         return list(_cache['cats'])
 
 
+def is_blocked(name, cfg=None):
+    """Vale também para nomes fora do catálogo (ex.: grupos de canais ao vivo)."""
+    cfg = cfg or load()
+    name = name or ''
+    return name in cfg['blocked'] or (cfg['auto'] and is_adult(name) and name not in cfg['allowed'])
+
+
 def blocked_set(cfg=None):
     cfg = cfg or load()
     blocked = set(cfg['blocked'])

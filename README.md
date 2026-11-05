@@ -49,3 +49,21 @@ No painel, o botão **Filtro** (ícone de escudo) bloqueia categorias inteiras, 
 - No painel ele também fica oculto, a não ser que a opção *Mostrar o conteúdo bloqueado neste painel* esteja ligada.
 
 A configuração fica em `data/content_filter.json`.
+
+## Canais ao vivo (lista própria de IPTV)
+
+A aba **Canais** funciona como o "Channels" do Dispatcharr:
+
+- **À esquerda** ficam todos os canais ao vivo encontrados nas listas, com logo, grupo e lista de origem. Dá para filtrar por nome, lista e grupo, e adicionar um a um ou o grupo inteiro de uma vez. Filmes e episódios não entram; os grupos bloqueados pelo *Filtro de conteúdo* também não.
+- **À direita** fica a sua seleção:
+  - arrastar para reordenar, numerar os canais e editar nome ou grupo (clique no nome);
+  - **testar** todos, só os novos ou um por um; o teste roda em segundo plano e mostra o progresso;
+  - remover de uma vez os canais com falha.
+- **Lista gerada**: um endereço M3U protegido por chave (`/strm-api/channels.m3u?t=…`), que pode ir para:
+  - a TV ao vivo do Jellyfin (sintonizador M3U);
+  - a "Minha lista" do StreamBox;
+  - qualquer player IPTV.
+
+  Também dá para informar o guia (EPG/XMLTV) e escolher incluir só canais testados e funcionando, que é o padrão. Se o link vazar, gere uma nova chave.
+
+A seleção fica em `data/channels.sqlite`, com cópia dos dados de cada canal, e os logos ficam guardados em `data/channel_logos/`.
