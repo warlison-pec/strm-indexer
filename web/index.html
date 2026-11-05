@@ -141,9 +141,16 @@
           </div>
           <div id="managedList" class="managed-list"></div>
         </div>
-        <aside class="panel">
-          <div class="panel-head"><h3><svg><use href="#i-bell"/></svg>Notificações</h3></div>
-          <div id="alertList" class="timeline"></div>
+        <aside class="side-stack">
+          <div class="panel">
+            <div class="panel-head"><h3><svg><use href="#i-antenna"/></svg>Séries monitoradas</h3><button class="btn sm" id="watchCheck" type="button"><svg><use href="#i-refresh"/></svg>Verificar agora</button></div>
+            <p class="note watch-info" id="watchInfo"></p>
+            <div id="watchList" class="watch-list"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h3><svg><use href="#i-bell"/></svg>Notificações</h3></div>
+            <div id="alertList" class="timeline"></div>
+          </div>
         </aside>
       </div>
     </section>
@@ -180,6 +187,7 @@
             <div class="ch-actions">
               <button class="btn sm" id="chTestAll" type="button"><svg><use href="#i-check"/></svg>Testar todos</button>
               <button class="btn sm ghost" id="chTestNew" type="button">Testar novos</button>
+              <button class="btn sm ghost" id="chFindAlts" type="button" title="Procura o mesmo canal em outras listas para usar se a fonte principal cair">Buscar reservas</button>
               <button class="btn sm ghost" id="chRenumber" type="button">Numerar</button>
               <button class="btn sm ghost" id="chDropFailed" type="button"><svg><use href="#i-trash"/></svg>Remover com falha</button>
             </div></div>
@@ -195,9 +203,16 @@
         <div class="ch-url"><input id="chBase" placeholder="ex.: http://192.168.1.16:8794 (rede local)" autocomplete="off"><button class="btn" id="chBaseSave" type="button"><svg><use href="#i-check"/></svg>Usar</button></div>
         <label class="ch-label">Lista de canais (M3U)</label>
         <div class="ch-url"><input id="chUrl" readonly><button class="btn" data-copy="chUrl" type="button"><svg><use href="#i-copy"/></svg>Copiar</button><a class="btn ghost" id="chDownload" download="canais.m3u">Baixar</a></div>
+        <label class="ch-label">Lista para o Jellyfin <small class="muted">· fluxo TS contínuo, como o Dispatcharr</small></label>
+        <div class="ch-url"><input id="chJfUrl" readonly><button class="btn" data-copy="chJfUrl" type="button"><svg><use href="#i-copy"/></svg>Copiar</button></div>
         <label class="ch-label">Guia de programação (XMLTV) <small class="muted" id="chEpgInfo"></small></label>
         <div class="ch-url"><input id="chGuideUrl" readonly><button class="btn" data-copy="chGuideUrl" type="button"><svg><use href="#i-copy"/></svg>Copiar</button><a class="btn ghost" id="chGuideDownload" download="guia.xml">Baixar</a></div>
-        <p class="muted ch-hint">No Jellyfin: Painel → TV ao vivo → adicione a lista como <b>sintonizador M3U</b> e o guia como <b>provedor XMLTV</b>. No StreamBox, use os dois em "Minha lista". A lista já aponta para o guia no cabeçalho, então a maioria dos players acha o guia sozinha. Quem tiver os links consegue ver a lista: gere uma nova chave se eles vazarem.</p>
+        <p class="muted ch-hint">No Jellyfin: Painel → TV ao vivo → adicione a <b>lista para o Jellyfin</b> como <b>sintonizador M3U</b> (com "Repetir automaticamente transmissões ao vivo" desmarcado) e o guia como <b>provedor XMLTV</b>. No StreamBox, use os dois em "Minha lista". A lista já aponta para o guia no cabeçalho, então a maioria dos players acha o guia sozinha. Quem tiver os links consegue ver a lista: gere uma nova chave se eles vazarem.</p>
+        <label class="ch-label">Endereços dos canais na lista</label>
+        <div class="segmented ch-mode" id="chMode">
+          <button type="button" data-m="auto">Automático (recomendado)</button><button type="button" data-m="proxy">Sempre pelo indexador</button><button type="button" data-m="direct">Sempre direto</button>
+        </div>
+        <p class="muted ch-hint" id="chModeHint"></p>
         <div class="ch-settings">
           <label class="cf-toggle"><input type="checkbox" id="chOnlyOk"><span><b>Incluir só canais testados e funcionando</b><small>Canais novos ou com falha ficam de fora até passarem no teste.</small></span></label>
           <div class="ch-actions"><button class="btn primary" id="chSaveSettings" type="button"><svg><use href="#i-check"/></svg>Salvar</button><button class="btn ghost" id="chNewToken" type="button"><svg><use href="#i-refresh"/></svg>Gerar nova chave</button></div>
@@ -275,6 +290,15 @@
     <h3 id="dlgTitle"></h3>
     <p id="dlgText"></p>
     <div class="dialog-actions"><button class="btn ghost" id="dlgCancel" type="button">Cancelar</button><button class="btn primary" id="dlgOk" type="button">Confirmar</button></div>
+  </div>
+</div>
+
+<div class="catpop-wrap hidden" id="altpop" role="dialog" aria-modal="true" aria-labelledby="altpopTitle">
+  <div class="catpop">
+    <div class="catpop-head"><h3 id="altpopTitle">Fontes do canal</h3><button class="icon-btn" id="altpopClose" type="button" aria-label="Fechar"><svg><use href="#i-x"/></svg></button></div>
+    <p class="muted ch-hint ch-hint-top">O canal usa a fonte principal e, se ela não responder, passa para as reservas na ordem. A troca automática funciona quando o canal é entregue pelo indexador.</p>
+    <div class="alt-list" id="altpopList"></div>
+    <div class="ch-actions"><button class="btn sm" id="altpopFind" type="button"><svg><use href="#i-search"/></svg>Procurar reservas</button><button class="btn sm ghost" id="altpopTest" type="button"><svg><use href="#i-refresh"/></svg>Testar fontes</button></div>
   </div>
 </div>
 

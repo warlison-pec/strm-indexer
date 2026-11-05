@@ -50,6 +50,19 @@ No painel, o botão **Filtro** (ícone de escudo) bloqueia categorias inteiras, 
 
 A configuração fica em `data/content_filter.json`.
 
+## Séries monitoradas (episódios novos automáticos)
+
+Como no Sonarr: ao abrir uma série no catálogo, ligue **"Monitorar episódios novos"** (a chave fica no quadro
+"Importar em lote"; importar uma série já liga o monitoramento sozinho). A partir daí:
+
+- as listas cadastradas por link são baixadas de novo a cada `INDEXER_WATCH_REFRESH_HOURS` horas (padrão 6; `0` desliga) e o catálogo é reindexado;
+- sempre que o catálogo muda (por essa rotina ou por uma reindexação manual), os episódios que ainda não passaram
+  pelo indexador são validados como na importação em lote e viram STRM; o Jellyfin é avisado para atualizar a biblioteca;
+- cada episódio novo gera uma notificação (e o webhook, se configurado); os sem fonte válida entram na nova tentativa diária.
+
+Se a série foi importada a partir de uma temporada, o monitoramento vale dessa temporada em diante.
+A lista de séries monitoradas, com o botão **Verificar agora**, fica na aba **Gerenciados**.
+
 ## Canais ao vivo (lista própria de IPTV)
 
 A aba **Canais** funciona como o "Channels" do Dispatcharr:
@@ -67,6 +80,34 @@ A aba **Canais** funciona como o "Channels" do Dispatcharr:
   Também dá para informar o guia (EPG/XMLTV) e escolher incluir só canais testados e funcionando, que é o padrão. Se o link vazar, gere uma nova chave.
 
 A seleção fica em `data/channels.sqlite`, com cópia dos dados de cada canal, e os logos ficam guardados em `data/channel_logos/`.
+
+### Lista para o Jellyfin (TS contínuo)
+
+O ffmpeg do Jellyfin lida mal com canais HLS (`.m3u8`) ao vivo: quando a lista da fonte atrasa, ele
+entende que o canal acabou e, com "Repetir automaticamente transmissões ao vivo" ligado, volta e repete
+o trecho. Por isso o painel mostra um segundo link, **Lista para o Jellyfin** (`channels.m3u?t=...&fmt=ts`):
+nele todos os canais passam pelo indexador como um fluxo **MPEG-TS contínuo**, como o Dispatcharr entrega.
+
+- O indexador acompanha a lista HLS da fonte, começa perto do ao vivo e emenda os pedaços novos sem repetir.
+- Pedaço perdido é pulado; se a fonte parar por 45 s, troca para a reserva sem fechar a conexão.
+- Fontes com pedaços fMP4 ou criptografados não podem ser emendadas e retornam erro nesse link (use a lista normal).
+- No sintonizador M3U do Jellyfin, deixe **"Repetir automaticamente transmissões ao vivo" desmarcado**.
+
+### Cabeçalhos e fontes reserva
+
+Muitos canais só respondem com um *User-Agent* ou *Referer* específico. O indexador entende os três formatos usados nas listas:
+- `#EXTVLCOPT:http-user-agent=…` / `#EXTVLCOPT:http-referrer=…` (VLC, iptv-org);
+- `#EXTHTTP:{"User-Agent": "…"}`;
+- `http://canal|User-Agent=…&Referer=…` (Kodi).
+
+Os testes usam esses cabeçalhos, então um canal no ar não aparece mais como falha só por falta deles.
+
+**Buscar reservas** procura o mesmo canal em outras listas, pelo `tvg-id` (ignorando a variante `@HD`) ou pelo nome sem HD/FHD/(1080p). O resultado fica guardado como fonte reserva. No botão `⇄` do canal dá para ver as fontes, promover uma reserva a principal ou removê-la. O teste passa por todas as fontes, e o canal fica "OK" se alguma funcionar.
+
+**Endereços dos canais na lista**:
+- **Automático** (padrão): canais que exigem cabeçalhos ou têm reserva saem pelo indexador (`/strm-api/ch/<id>.m3u8|.ts`). Ele envia os cabeçalhos, repassa a lista HLS e os pedaços, e passa para a próxima fonte se uma não responder. Os outros vão direto para a fonte.
+- **Sempre pelo indexador**: todos passam pelo servidor.
+- **Sempre direto**: todos os links vão direto para a fonte, com os cabeçalhos em `#EXTVLCOPT`.
 
 ### Guia de programação (EPG)
 

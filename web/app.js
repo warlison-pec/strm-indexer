@@ -504,20 +504,24 @@ function renderSelected() {
     const [cls, label] = ST[x.status] || ST.untested;
     const num = h('input', { class: 'ch-num', type: 'number', min: 0, value: x.number ?? '', title: 'Número do canal', placeholder: '#' });
     num.addEventListener('change', () => post('/channels/update', { id: x.id, number: num.value }).then(() => (x.number = num.value === '' ? null : +num.value)).catch(e => toast(e.message, 'bad')));
-    const name = h('span', { class: 'ch-name', title: 'Clique para editar nome e grupo' }, h('b', { text: x.name }), h('small', { text: x.group_title || 'Sem grupo' }));
+    const name = h('span', { class: 'ch-name', title: 'Clique para editar nome e grupo' }, h('b', { text: x.name }),
+      h('small', { text: (x.group_title || 'Sem grupo') + (x.headers ? ' · exige cabeçalhos' : '') }));
     name.addEventListener('click', () => chEdit(x, name));
     const st = h('span', { class: 'ch-st ' + cls, text: label, title: x.detail || (x.status === 'untested' ? 'Ainda não testado' : '') });
     const g = h('button', { class: 'ch-epg' + (x.epg ? ' on' : x.epg_mode === 'none' ? ' off' : ''), type: 'button',
       title: x.epg ? `Guia: ${x.epg.name} · ${x.epg.source}` + (x.epg_mode === 'manual' ? ' (escolhido à mão)' : ' (automático)') : x.epg_mode === 'none' ? 'Sem guia (desativado)' : 'Nenhum guia encontrado: clique para escolher' },
       x.epg ? '📺 ' + x.epg.name : x.epg_mode === 'none' ? 'Sem guia' : 'Guia?');
     g.addEventListener('click', () => openEpgPicker(x));
+    const alt = h('button', { class: 'ch-alt' + (x.alt_count ? ' has' : ''), type: 'button',
+      title: x.alt_count ? `${x.alt_count} fonte(s) reserva · ${x.alt_ok || 0} funcionando` : 'Sem fontes reserva: clique para procurar' }, '⇄ ' + (x.alt_count || 0));
+    alt.addEventListener('click', () => openAlternates(x));
     const test = h('button', { class: 'ch-ico', type: 'button', title: 'Testar este canal' }, icon('refresh'));
     test.addEventListener('click', async () => { st.className = 'ch-st testing'; st.textContent = '…'; await post('/channels/test', { ids: [x.id] }).catch(e => toast(e.message, 'bad')); chWatchTest(); });
     const del = h('button', { class: 'ch-ico', type: 'button', title: 'Remover da lista' }, icon('trash'));
     del.addEventListener('click', async () => { await post('/channels/remove', { ids: [x.id] }).catch(e => toast(e.message, 'bad')); ch.sel = ch.sel.filter(y => y.id !== x.id); renderSelected(); renderAvail(); });
     const row = h('div', { class: 'ch-row', data: { id: x.id } },
       canDrag ? h('span', { class: 'ch-grip', title: 'Arraste para reordenar' }, icon('grip')) : null,
-      num, chLogo(x.id, !!x.logo, x.name), name, g, st, test, del);
+      num, chLogo(x.id, !!x.logo, x.name), name, alt, g, st, test, del);
     if (canDrag) {
       row.draggable = true;
       row.addEventListener('dragstart', e => { ch.dragId = x.id; row.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; });
@@ -572,8 +576,16 @@ function renderOutput() {
   const url = `${base}/strm-api/channels.m3u?t=${t}`, guide = `${base}/strm-api/channels.xml?t=${t}`;
   if (document.activeElement !== $('chBase')) $('chBase').value = ch.settings.link_base || '';
   $('chUrl').value = url; $('chDownload').href = url;
+  $('chJfUrl').value = `${url}&fmt=ts`;
   $('chGuideUrl').value = guide; $('chGuideDownload').href = guide;
   $('chOnlyOk').checked = !!ch.settings.only_ok;
+  const mode = ch.settings.stream_mode || 'auto';
+  $('chMode').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.m === mode));
+  $('chModeHint').textContent = {
+    auto: 'Canais que exigem cabeçalhos ou têm reserva passam pelo indexador (com troca automática de fonte); os outros vão direto para o player, sem gastar a rede do servidor.',
+    proxy: 'Todos os canais passam pelo indexador. Mais compatível, mas todo o vídeo trafega pelo servidor.',
+    direct: 'Todos os links vão direto para a fonte, com os cabeçalhos em #EXTVLCOPT (funciona no VLC, Kodi, TiviMate…). Sem troca automática para a reserva.',
+  }[mode];
   const e = ch.epg || { mapped: 0, total: 0, sources: [] };
   $('chEpgInfo').textContent = e.sources.length ? `· ${fmt(e.mapped)} de ${fmt(e.total)} canais com guia` : '· cadastre uma fonte de guia abaixo';
   renderEpgSources();
@@ -668,6 +680,54 @@ document.querySelectorAll('[data-copy]').forEach(btn => btn.addEventListener('cl
 $('chSaveSettings').addEventListener('click', async () => {
   try { const r = await post('/channels/settings', { only_ok: $('chOnlyOk').checked }); ch.settings = r.settings; toast('Configuração salva', 'ok'); }
   catch (e) { toast(e.message, 'bad'); }
+});
+$('chMode').addEventListener('click', async e => {
+  const b = e.target.closest('button'); if (!b) return;
+  try { const r = await post('/channels/settings', { stream_mode: b.dataset.m }); ch.settings = r.settings; renderOutput(); toast('Modo dos endereços salvo', 'ok'); }
+  catch (err) { toast(err.message, 'bad'); }
+});
+$('chFindAlts').addEventListener('click', async () => {
+  try { const r = await post('/channels/alternates/find', {}); toast(`${fmt(r.added)} fonte(s) reserva encontrada(s)` + (r.added ? ' · teste a lista para conferir' : ''), r.added ? 'ok' : 'info'); chLoadSelected(); }
+  catch (err) { toast(err.message, 'bad'); }
+});
+/* Fontes de um canal: principal + reservas */
+let altFor = null;
+async function openAlternates(x) {
+  altFor = x;
+  $('altpopTitle').textContent = 'Fontes de ' + x.name;
+  $('altpop').classList.remove('hidden');
+  await renderAlternates();
+}
+async function renderAlternates(data) {
+  const list = $('altpopList');
+  try {
+    const d = data || await api('/channels/alternates', { params: { id: altFor.id } });
+    const row = (s, label, extra) => {
+      const [cls, txt] = ST[s.status] || ST.untested;
+      return h('div', { class: 'alt-row' + (extra ? '' : ' main') },
+        h('span', { class: 'ch-name' }, h('b', { text: label + ' · ' + s.name }), h('small', { text: [s.source, s.headers ? 'exige cabeçalhos' : '', s.detail].filter(Boolean).join(' · ') })),
+        h('span', { class: 'ch-st ' + cls, text: txt }), extra || null);
+    };
+    list.replaceChildren(row(d.main, 'Principal'));
+    d.items.forEach((a, i) => {
+      const up = h('button', { class: 'ch-ico', type: 'button', title: 'Usar como principal' }, icon('check'));
+      up.addEventListener('click', async () => { try { renderAlternates(await post('/channels/alternates/promote', { id: altFor.id, alt: a.id })); chLoadSelected(); } catch (e) { toast(e.message, 'bad'); } });
+      const del = h('button', { class: 'ch-ico', type: 'button', title: 'Remover reserva' }, icon('trash'));
+      del.addEventListener('click', async () => { try { renderAlternates(await post('/channels/alternates/remove', { id: altFor.id, alt: a.id })); chLoadSelected(); } catch (e) { toast(e.message, 'bad'); } });
+      list.append(row(a, 'Reserva ' + (i + 1), h('span', { class: 'ch-actions' }, up, del)));
+    });
+    if (!d.items.length) list.append(h('div', { class: 'ch-empty', text: 'Nenhuma reserva. Use "Procurar reservas" para achar o mesmo canal em outras listas.' }));
+  } catch (e) { list.replaceChildren(h('div', { class: 'ch-empty', text: e.message })); }
+}
+$('altpopClose').addEventListener('click', () => $('altpop').classList.add('hidden'));
+$('altpop').addEventListener('click', e => { if (e.target === $('altpop')) $('altpop').classList.add('hidden'); });
+$('altpopFind').addEventListener('click', async () => {
+  try { const r = await post('/channels/alternates/find', { ids: [altFor.id] }); toast(`${fmt(r.added)} reserva(s) encontrada(s)`, r.added ? 'ok' : 'info'); renderAlternates(); chLoadSelected(); }
+  catch (e) { toast(e.message, 'bad'); }
+});
+$('altpopTest').addEventListener('click', async () => {
+  await post('/channels/test', { ids: [altFor.id] }).catch(e => toast(e.message, 'bad'));
+  const wait = setInterval(async () => { const t = await api('/channels/test').catch(() => null); if (!t || !t.running) { clearInterval(wait); renderAlternates(); chLoadSelected(); } }, 1200);
 });
 $('chBaseSave').addEventListener('click', async () => {
   try {
@@ -1277,10 +1337,29 @@ function batchPanel(title, seasonNums) {
   const start = btn('Adicionar ao Jellyfin', { cls: 'primary', ico: 'plus' });
   const progress = h('div', { class: 'progress hidden' });
   const pending = h('div');
+  // Monitorar: episódios novos que aparecerem nas listas entram sozinhos (como o Sonarr)
+  const watchBox = h('input', { attrs: { type: 'checkbox' } });
+  const watchSub = h('small', { text: 'Quando sair episódio novo nas listas, ele é validado e adicionado ao Jellyfin sozinho.' });
+  const watchToggle = h('label', { class: 'cf-toggle watch-toggle' }, watchBox, h('span', null, h('b', { text: 'Monitorar episódios novos' }), watchSub));
+  const setWatch = async (on, season) => {
+    const r = await post('/series/watch', { title, source: state.source, season: season === '' ? null : season, on });
+    watchBox.checked = r.watching;
+    watchSub.textContent = r.watching
+      ? 'Monitorando' + (r.from_season != null ? ' a partir da temporada ' + r.from_season : ' a série inteira') + '. Episódios novos entram sozinhos.'
+      : 'Quando sair episódio novo nas listas, ele é validado e adicionado ao Jellyfin sozinho.';
+  };
+  watchBox.addEventListener('change', async () => {
+    try { await setWatch(watchBox.checked, select.value === '' ? '' : Number(select.value)); toast(watchBox.checked ? 'Série monitorada' : 'Monitoramento desligado', 'ok'); }
+    catch (e) { watchBox.checked = !watchBox.checked; toast('Erro: ' + e.message, 'bad'); }
+  });
+  api('/series/watch', { params: { title, source: state.source } }).then(d => {
+    watchBox.checked = d.watching;
+    if (d.watching) watchSub.textContent = 'Monitorando' + (d.from_season != null ? ' a partir da temporada ' + d.from_season : ' a série inteira') + '. Episódios novos entram sozinhos.';
+  }).catch(() => {});
   const panel = h('div', { class: 'batch' },
     h('strong', { text: 'Importar em lote' }),
     h('p', { text: 'Cada episódio é validado antes de virar STRM. Os indisponíveis ficam pendentes e são verificados de novo todos os dias.' }),
-    h('div', { class: 'batch-row' }, h('div', { class: 'select' }, select, icon('chev')), start), progress, pending);
+    h('div', { class: 'batch-row' }, h('div', { class: 'select' }, select, icon('chev')), start), watchToggle, progress, pending);
 
   start.addEventListener('click', async () => {
     const scope = select.value ? 'a temporada ' + select.value : 'todas as temporadas';
@@ -1290,6 +1369,8 @@ function batchPanel(title, seasonNums) {
       const payload = { title, source: state.source };
       if (select.value !== '') payload.season = Number(select.value);
       const r = await post('/series/batch', payload);
+      // importou: passa a monitorar (série inteira ou a partir da temporada escolhida); dá para desligar na chave
+      setWatch(true, select.value === '' ? '' : Number(select.value)).catch(() => {});
       toast(r.already_running ? 'Essa importação já está na fila' : 'Fila iniciada: ' + fmt(r.episodes) + ' episódios', 'info');
       stopTimers();
       const tick = () => pollJob(r.job_id, progress, start);
@@ -1331,7 +1412,36 @@ async function pollJob(id, box, start) {
 }
 
 /* ============================== Gerenciados ============================== */
+async function loadWatched() {
+  const box = $('watchList');
+  try {
+    const d = await api('/series/watched');
+    const st = d.state || {};
+    $('watchInfo').textContent = (st.running ? st.message + ' · ' : '') +
+      (d.refresh_hours > 0 ? 'Listas por link são baixadas de novo a cada ' + d.refresh_hours + ' h. ' : 'Atualização automática das listas desligada. ') +
+      (st.last_check ? 'Última verificação: ' + new Date(st.last_check * 1000).toLocaleString('pt-BR') + '.' : '');
+    box.replaceChildren();
+    if (!d.items.length) box.append(h('p', { class: 'note', text: 'Nenhuma série monitorada. Abra uma série no catálogo e ligue "Monitorar episódios novos".' }));
+    for (const w of d.items) {
+      const off = btn('', { cls: 'sm ghost', ico: 'x', title: 'Parar de monitorar' });
+      off.addEventListener('click', () => busy(off, async () => {
+        if (!await ask('Parar de monitorar', 'Episódios novos de "' + w.title + '" não serão mais adicionados sozinhos. Os que já estão no Jellyfin continuam.', { ok: 'Parar' })) return;
+        try { await post('/series/watch', { title: w.title, source: w.source, on: false }); toast('Monitoramento desligado', 'ok'); loadWatched(); }
+        catch (e) { toast('Erro: ' + e.message, 'bad'); }
+      }));
+      const info = [w.from_season != null ? 'desde a T' + w.from_season : 'série inteira', w.added_total ? fmt(w.added_total) + ' novo(s) adicionados' : null, w.last_message || null].filter(Boolean).join(' · ');
+      box.append(h('div', { class: 'watch-row' }, h('div', null, h('strong', { text: w.title }), h('small', { text: info })), off));
+    }
+  } catch (e) { box.replaceChildren(h('p', { class: 'note', text: 'Não foi possível consultar: ' + e.message })); }
+}
+
+$('watchCheck').addEventListener('click', () => busy($('watchCheck'), async () => {
+  try { await post('/series/watch/check'); toast('Verificação iniciada', 'info'); setTimeout(() => { loadWatched(); loadManaged(); }, 4000); }
+  catch (e) { toast('Erro: ' + e.message, 'bad'); }
+}));
+
 async function loadManaged() {
+  loadWatched();
   const list = $('managedList');
   list.replaceChildren(...[1, 2, 3, 4].map(() => h('div', { class: 'mrow skeleton' }, h('div', { class: 'sk' }), h('div', { class: 'sk' }))));
   try {

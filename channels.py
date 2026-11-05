@@ -11,6 +11,7 @@ logo nem tvg-id). A seleção fica em <INDEXER_STATE_DIR>/channels.sqlite com um
 então ela continua funcionando mesmo se a lista de origem mudar.
 """
 import hashlib
+import json
 import re
 import secrets
 import sqlite3
@@ -18,7 +19,9 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.error import HTTPError
+from urllib.parse import urlsplit, parse_qsl, quote, urljoin
+from urllib.request import Request
 
 import media_control as media
 import content_filter
@@ -31,6 +34,42 @@ MAX_SELECTED = 5000
 _lock = threading.Lock()
 _index = {'sig': None, 'items': [], 'by_id': {}}
 _test = {'running': False, 'total': 0, 'done': 0, 'ok': 0, 'fail': 0, 'started': 0.0}
+DEFAULT_UA = 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36'
+_HDR_OK = re.compile(r'^[\x20-\x7e]{1,300}$')
+_QUALITY = re.compile(r'\((?:\d{3,4}p|[^)]*geo[^)]*|[^)]*block[^)]*)\)|\[[^\]]*\]|\b(?:hd|fhd|sd|4k|uhd|h265|hevc|alt|backup|\d{3,4}p)\b', re.I)
+
+
+def _hdr(value):
+    """Valor de cabeçalho seguro (sem quebra de linha, tamanho limitado)."""
+    value = (value or '').strip().strip('"')
+    return value if _HDR_OK.match(value) else ''
+
+
+def _split_kodi(url):
+    """'http://x/canal.m3u8|User-Agent=Abc&Referer=http://y' -> url limpa + cabeçalhos."""
+    if '|' not in url:
+        return url, {}
+    base, _, opts = url.partition('|')
+    found = {}
+    for k, v in parse_qsl(opts, keep_blank_values=False):
+        k = k.strip().lower()
+        if k in ('user-agent', 'http-user-agent'):
+            found['ua'] = v
+        elif k in ('referer', 'referrer', 'http-referrer', 'http-referer'):
+            found['referer'] = v
+    return base.strip(), found
+
+
+def match_keys(tvg_id, name):
+    """Chaves para achar o mesmo canal em outras listas: tvg-id (sem a variante @HD) e nome limpo."""
+    keys = []
+    base = (tvg_id or '').split('@')[0].strip().lower()
+    if base:
+        keys.append('id:' + base)
+    n = norm(_QUALITY.sub(' ', name or ''))
+    if len(n) >= 2:
+        keys.append('n:' + n)
+    return keys
 
 
 # ------------------------------------------------------------------ banco da seleção
@@ -46,7 +85,16 @@ def connect():
             status TEXT NOT NULL DEFAULT 'untested', detail TEXT NOT NULL DEFAULT '', checked_at REAL,
             added_at REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS alternates(
+            channel_id TEXT NOT NULL, id TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', url TEXT NOT NULL,
+            ua TEXT NOT NULL DEFAULT '', referer TEXT NOT NULL DEFAULT '', source TEXT NOT NULL DEFAULT '',
+            position INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'untested',
+            detail TEXT NOT NULL DEFAULT '', checked_at REAL, PRIMARY KEY(channel_id, id));
     ''')
+    cols = {r['name'] for r in c.execute('PRAGMA table_info(selected)')}
+    for col in ('ua', 'referer'):
+        if col not in cols:
+            c.execute(f"ALTER TABLE selected ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
     return c
 
 
@@ -84,7 +132,7 @@ def _scan():
         return
     items, seen = [], set()
     for path in files:
-        title, attrs = None, {}
+        title, attrs, opts = None, {}, {}
         with path.open('r', encoding='utf-8-sig', errors='replace') as fh:
             for raw in fh:
                 line = raw.strip()
@@ -92,11 +140,36 @@ def _scan():
                     header, sep, display = line.partition(',')
                     attrs = dict(EXTINF_ATTR.findall(header))
                     title = (display if sep else '').strip() or attrs.get('tvg-name', '').strip()
+                    opts = {}
+                    for k in ('user-agent', 'http-user-agent'):
+                        if attrs.get(k):
+                            opts['ua'] = attrs[k]
+                    for k in ('referer', 'referrer', 'http-referrer'):
+                        if attrs.get(k):
+                            opts['referer'] = attrs[k]
+                elif line.startswith('#EXTVLCOPT:'):
+                    # cabeçalhos exigidos pelo canal (formato do VLC, usado pelas listas iptv-org)
+                    k, _, v = line[len('#EXTVLCOPT:'):].partition('=')
+                    k = k.strip().lower()
+                    if k == 'http-user-agent':
+                        opts['ua'] = v
+                    elif k in ('http-referrer', 'http-referer'):
+                        opts['referer'] = v
+                elif line.startswith('#EXTHTTP:'):
+                    try:
+                        hdrs = {str(k).lower(): str(v) for k, v in json.loads(line[len('#EXTHTTP:'):]).items()}
+                        if hdrs.get('user-agent'):
+                            opts['ua'] = hdrs['user-agent']
+                        if hdrs.get('referer') or hdrs.get('referrer'):
+                            opts['referer'] = hdrs.get('referer') or hdrs.get('referrer')
+                    except (ValueError, AttributeError):
+                        pass
                 elif not line or line.startswith('#'):
                     continue
                 elif title:
-                    url, name, a = line, title, attrs
-                    title, attrs = None, {}
+                    url, kodi = _split_kodi(line)
+                    name, a, o = title, attrs, {**opts, **kodi}
+                    title, attrs, opts = None, {}, {}
                     parts = urlsplit(url)
                     if parts.scheme not in ('http', 'https') or not parts.hostname:
                         continue
@@ -109,6 +182,7 @@ def _scan():
                     seen.add(cid)
                     items.append({'id': cid, 'name': name[:200], 'group': group[:200], 'logo': a.get('tvg-logo', '')[:500],
                                   'tvg_id': a.get('tvg-id', '')[:200], 'url': url, 'source': path.name,
+                                  'ua': _hdr(o.get('ua')), 'referer': _hdr(o.get('referer')),
                                   'n': norm(name)})
     _index.update(sig=sig, items=items, by_id={x['id']: x for x in items})
 
@@ -168,12 +242,17 @@ def selected():
     with connect() as c:
         rows = [dict(r) for r in c.execute('SELECT * FROM selected ORDER BY position, added_at')]
         settings = {'epg_url': _setting(c, 'epg_url'), 'only_ok': _setting(c, 'only_ok', '1') == '1',
-                    'link_base': _setting(c, 'link_base')}
+                    'link_base': _setting(c, 'link_base'), 'stream_mode': _setting(c, 'stream_mode', 'auto')}
+        alts = {r['channel_id']: (r['n'], r['ok'] or 0) for r in c.execute(
+            "SELECT channel_id, COUNT(*) n, SUM(status='ok') ok FROM alternates GROUP BY channel_id")}
     import epg
     names = epg.labels()
     for r in rows:
         r.pop('url', None)            # o endereço da fonte não vai para o navegador
         r['epg'] = names.get(r['id'])
+        r['alt_count'], r['alt_ok'] = alts.get(r['id'], (0, 0))
+        r['headers'] = bool(r.pop('ua', '') or r.pop('referer', ''))
+        r.pop('referer', None)
     return {'items': rows, 'settings': settings, 'token': token(), 'test': dict(_test), 'epg': epg.summary()}
 
 
@@ -199,9 +278,9 @@ def add(ids=None, q='', group='', source=''):
             if c.execute('SELECT 1 FROM selected WHERE id=?', (x['id'],)).fetchone():
                 continue
             pos += 1
-            c.execute('''INSERT INTO selected(id,name,group_title,logo,tvg_id,url,source,position,added_at)
-                         VALUES(?,?,?,?,?,?,?,?,?)''',
-                      (x['id'], x['name'], x['group'], x['logo'], x['tvg_id'], x['url'], x['source'], pos, now))
+            c.execute('''INSERT INTO selected(id,name,group_title,logo,tvg_id,url,source,position,added_at,ua,referer)
+                         VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
+                      (x['id'], x['name'], x['group'], x['logo'], x['tvg_id'], x['url'], x['source'], pos, now, x['ua'], x['referer']))
             added += 1
     if added:
         import epg
@@ -219,6 +298,7 @@ def remove(ids=None, failed=False):
             n = 0
             for i in ids[:MAX_SELECTED]:
                 n += c.execute('DELETE FROM selected WHERE id=?', (str(i),)).rowcount
+        c.execute('DELETE FROM alternates WHERE channel_id NOT IN (SELECT id FROM selected)')
     return {'removed': n}
 
 
@@ -265,8 +345,12 @@ def renumber(start=1):
     return {'ok': True}
 
 
-def save_settings(epg_url=None, only_ok=None, new_token=False, link_base=None):
+def save_settings(epg_url=None, only_ok=None, new_token=False, link_base=None, stream_mode=None):
     with connect() as c:
+        if stream_mode is not None:
+            if stream_mode not in ('auto', 'proxy', 'direct'):
+                raise ValueError('Modo inválido')
+            _set_setting(c, 'stream_mode', stream_mode)
         if link_base is not None:
             # Endereço usado nos links mostrados no painel (ex.: http://192.168.1.16:8794 na rede local)
             link_base = str(link_base).strip().rstrip('/')
@@ -285,12 +369,162 @@ def save_settings(epg_url=None, only_ok=None, new_token=False, link_base=None):
     return selected()
 
 
+# ------------------------------------------------------------------ acesso às fontes (com cabeçalhos)
+def _check_host(url):
+    import epg
+    epg._check(url)          # bloqueia rede interna, exceto INDEXER_TRUSTED_HOSTS
+
+
+def _open(url, ua='', referer='', timeout=12):
+    _check_host(url)
+    headers = {'User-Agent': ua or DEFAULT_UA, 'Accept': '*/*'}
+    if referer:
+        headers['Referer'] = referer
+        p = urlsplit(referer)
+        if p.scheme and p.hostname:
+            headers['Origin'] = f'{p.scheme}://{p.netloc}'
+    return media.OPENER.open(Request(url, headers=headers), timeout=timeout)
+
+
+def _looks_html(data):
+    return data[:200].lstrip().lower().startswith((b'<html', b'<!doctype', b'<?xml'))
+
+
+def probe(url, ua='', referer='', depth=0):
+    """Confere se a fonte entrega vídeo: (ok, detalhe, 'hls'|'ts')."""
+    try:
+        with _open(url, ua, referer, timeout=10) as r:
+            final = r.geturl()
+            ctype = (r.headers.get('Content-Type') or '').split(';')[0].strip().lower()
+            data = r.read(256 * 1024)
+        is_hls = data.lstrip(b'\xef\xbb\xbf').startswith(b'#EXTM3U') or 'mpegurl' in ctype
+        if is_hls:
+            if depth >= 2:
+                return True, 'Lista HLS respondeu', 'hls'
+            lines = [x.strip() for x in data.decode('utf-8', 'replace').splitlines()]
+            nxt = next((x for x in lines if x and not x.startswith('#')), None)
+            if not nxt:
+                return False, 'Lista HLS vazia', 'hls'
+            ok, detail, _ = probe(urljoin(final, nxt), ua, referer, depth + 1)
+            return ok, ('HLS · ' + detail) if ok else detail, 'hls'
+        if not data or _looks_html(data):
+            return False, 'Resposta não é vídeo', 'ts'
+        return True, f'Vídeo respondeu ({ctype or "binário"})', 'ts'
+    except HTTPError as e:
+        return False, f'HTTP {e.code}', ''
+    except Exception as e:   # tempo esgotado, DNS, conexão recusada, endereço bloqueado…
+        return False, str(e)[:150] or type(e).__name__, ''
+
+
+def sources_for(cid):
+    """Fonte principal + reservas, na ordem de uso."""
+    with connect() as c:
+        main = c.execute('SELECT id, url, ua, referer, status FROM selected WHERE id=?', (cid,)).fetchone()
+        if not main:
+            return []
+        alts = c.execute('SELECT id, url, ua, referer, status FROM alternates WHERE channel_id=? ORDER BY position', (cid,)).fetchall()
+    return [dict(main)] + [dict(a) for a in alts]
+
+
+# ------------------------------------------------------------------ fontes reserva
+def find_alternates(ids=None, limit=4):
+    """Procura o mesmo canal em outras listas (mesmo tvg-id ou mesmo nome) e guarda como reserva."""
+    items, _ = index()
+    cfg = content_filter.load()
+    by_key = {}
+    for x in items:
+        if _hidden(x['group'], cfg):
+            continue
+        for k in match_keys(x['tvg_id'], x['name']):
+            by_key.setdefault(k, []).append(x)
+    added = 0
+    with connect() as c:
+        rows = [dict(r) for r in c.execute('SELECT id, name, tvg_id, url FROM selected')]
+        if ids:
+            wanted = set(map(str, ids))
+            rows = [r for r in rows if r['id'] in wanted]
+        for r in rows:
+            have = {a['id'] for a in c.execute('SELECT id FROM alternates WHERE channel_id=?', (r['id'],))}
+            pos = len(have)
+            for k in match_keys(r['tvg_id'], r['name']):
+                for x in by_key.get(k, []):
+                    if pos >= limit:
+                        break
+                    if x['id'] == r['id'] or x['url'] == r['url'] or x['id'] in have:
+                        continue
+                    pos += 1
+                    have.add(x['id'])
+                    c.execute('INSERT OR IGNORE INTO alternates(channel_id,id,name,url,ua,referer,source,position) '
+                              'VALUES(?,?,?,?,?,?,?,?)',
+                              (r['id'], x['id'], x['name'], x['url'], x['ua'], x['referer'], x['source'], pos))
+                    added += 1
+    return {'added': added}
+
+
+def alternates(cid):
+    with connect() as c:
+        main = c.execute('SELECT name, source, status, detail, ua, referer FROM selected WHERE id=?', (str(cid),)).fetchone()
+        if not main:
+            raise ValueError('Canal não encontrado')
+        alts = [dict(r) for r in c.execute('SELECT id, name, source, status, detail, ua, referer, position '
+                                           'FROM alternates WHERE channel_id=? ORDER BY position', (str(cid),))]
+
+    def pub(r):
+        return {'name': r['name'], 'source': r['source'], 'status': r['status'], 'detail': r['detail'],
+                'headers': bool(r['ua'] or r['referer'])}
+    return {'main': pub(main), 'items': [pub(a) | {'id': a['id']} for a in alts]}
+
+
+def remove_alternate(cid, alt_id):
+    with connect() as c:
+        c.execute('DELETE FROM alternates WHERE channel_id=? AND id=?', (str(cid), str(alt_id)))
+    return alternates(cid)
+
+
+def promote_alternate(cid, alt_id):
+    """Troca a fonte principal pela reserva escolhida (a principal vira reserva)."""
+    with connect() as c:
+        main = c.execute('SELECT url, ua, referer, source, name, status, detail FROM selected WHERE id=?', (str(cid),)).fetchone()
+        alt = c.execute('SELECT * FROM alternates WHERE channel_id=? AND id=?', (str(cid), str(alt_id))).fetchone()
+        if not main or not alt:
+            raise ValueError('Fonte não encontrada')
+        c.execute('UPDATE selected SET url=?, ua=?, referer=?, source=?, status=?, detail=? WHERE id=?',
+                  (alt['url'], alt['ua'], alt['referer'], alt['source'], alt['status'], alt['detail'], str(cid)))
+        c.execute('UPDATE alternates SET id=?, url=?, ua=?, referer=?, source=?, name=?, status=?, detail=? '
+                  'WHERE channel_id=? AND id=?',
+                  (hashlib.sha1(main['url'].encode()).hexdigest()[:16], main['url'], main['ua'], main['referer'],
+                   main['source'], main['name'], main['status'], main['detail'], str(cid), str(alt_id)))
+    _good.pop(str(cid), None)
+    return alternates(cid)
+
+
 # ------------------------------------------------------------------ teste dos canais
 def _check(row):
-    ok, detail = media.validate_media(row['url'])
+    """Testa a principal e as reservas; o canal funciona se alguma fonte responder."""
+    srcs = sources_for(row['id'])
+    results = []
+    for i, src in enumerate(srcs):
+        ok, detail, _ = probe(src['url'], src['ua'], src['referer'])
+        results.append((ok, detail))
+        if i:
+            with connect() as c:
+                c.execute('UPDATE alternates SET status=?, detail=?, checked_at=? WHERE channel_id=? AND id=?',
+                          ('ok' if ok else 'fail', detail[:200], time.time(), row['id'], src['id']))
+    good = [i for i, (ok, _) in enumerate(results) if ok]
+    ok = bool(good)
+    if not results:
+        detail = 'Sem fonte'
+    elif results[0][0]:
+        detail = results[0][1]
+    elif good:
+        detail = f'Principal falhou ({results[0][1]}); reserva {good[0]} funcionando'
+    else:
+        detail = results[0][1]
+    if good:
+        _good[row['id']] = (good[0], time.time())
     with connect() as c:
         c.execute('UPDATE selected SET status=?, detail=?, checked_at=? WHERE id=?',
-                  ('ok' if ok else 'fail', str(detail)[:200], time.time(), row['id']))
+                  ('ok' if ok else 'fail', detail[:200], time.time(), row['id']))
     with _lock:
         _test['done'] += 1
         _test['ok' if ok else 'fail'] += 1
@@ -301,7 +535,7 @@ def start_test(ids=None, only_untested=False):
         if _test['running']:
             return dict(_test)
     with connect() as c:
-        rows = [dict(r) for r in c.execute('SELECT id, url, status FROM selected ORDER BY position')]
+        rows = [dict(r) for r in c.execute('SELECT id, status FROM selected ORDER BY position')]
     if ids:
         wanted = set(map(str, ids))
         rows = [r for r in rows if r['id'] in wanted]
@@ -312,7 +546,7 @@ def start_test(ids=None, only_untested=False):
 
     def run():
         try:
-            with ThreadPoolExecutor(max_workers=6) as pool:
+            with ThreadPoolExecutor(max_workers=8) as pool:
                 list(pool.map(_check, rows))
         finally:
             with _lock:
@@ -323,6 +557,282 @@ def start_test(ids=None, only_untested=False):
 
 def test_status():
     return dict(_test)
+
+
+# ------------------------------------------------------------------ transmissão pelo indexador
+_good = {}            # canal -> (índice da fonte que funcionou, quando)
+URI_ATTR = re.compile(r'URI="([^"]+)"')
+
+
+def _rewrite(text, base, cid, sidx, t):
+    """Reescreve a lista HLS para que sub-listas e pedaços passem pelo indexador (com os cabeçalhos)."""
+    prefix = f'seg?t={quote(t, safe="")}&c={cid}&s={sidx}&u='
+    out = []
+    for line in text.splitlines():
+        s = line.strip()
+        if s and not s.startswith('#'):
+            line = prefix + quote(urljoin(base, s), safe='')
+        elif 'URI="' in s:
+            line = URI_ATTR.sub(lambda m: 'URI="' + prefix + quote(urljoin(base, m.group(1)), safe='') + '"', line)
+        out.append(line)
+    return ('\n'.join(out) + '\n').encode()
+
+
+def _send_bytes(handler, data, ctype):
+    handler.send_response(200)
+    handler.send_header('Content-Type', ctype)
+    handler.send_header('Content-Length', str(len(data)))
+    handler.send_header('Cache-Control', 'no-store')
+    handler.send_header('Access-Control-Allow-Origin', '*')
+    handler.end_headers()
+    handler.wfile.write(data)
+
+
+def _pipe(handler, resp, first, ctype):
+    handler.send_response(200)
+    handler.send_header('Content-Type', ctype or 'video/mp2t')
+    length = resp.headers.get('Content-Length')
+    if length and length.isdigit():
+        handler.send_header('Content-Length', str(int(length)))
+    handler.send_header('Cache-Control', 'no-store')
+    handler.send_header('Access-Control-Allow-Origin', '*')
+    handler.end_headers()
+    try:
+        handler.wfile.write(first)
+        while True:
+            chunk = resp.read(64 * 1024)
+            if not chunk:
+                break
+            handler.wfile.write(chunk)
+    except (BrokenPipeError, ConnectionResetError):
+        pass   # o player fechou
+
+
+def stream(handler, cid, kind, t):
+    """/strm-api/ch/<canal>.m3u8|.ts — tenta as fontes em ordem (a última que funcionou primeiro)."""
+    if not valid_token(t):
+        return handler.send_json(403, {'error': 'Chave inválida'})
+    srcs = sources_for(cid)
+    if not srcs:
+        return handler.send_json(404, {'error': 'Canal não encontrado'})
+    order = list(range(len(srcs)))
+    last = _good.get(cid)
+    if last and last[0] < len(srcs) and time.time() - last[1] < 600:
+        order.remove(last[0])
+        order.insert(0, last[0])
+    errors = []
+    for i in order:
+        src = srcs[i]
+        try:
+            resp = _open(src['url'], src['ua'], src['referer'], timeout=10)
+        except Exception as exc:
+            errors.append(str(exc)[:80])
+            continue
+        try:
+            final = resp.geturl()
+            ctype = (resp.headers.get('Content-Type') or '').split(';')[0].strip().lower()
+            first = resp.read(7)
+            is_hls = first.lstrip(b'\xef\xbb\xbf').startswith(b'#EXTM3U') or 'mpegurl' in ctype
+            if is_hls and kind == 'ts':
+                resp.close()
+                # Fonte HLS pedida como .ts: emenda os pedaços num fluxo contínuo (melhor no Jellyfin)
+                rest = order[order.index(i):]
+                if _hls_to_ts(handler, cid, srcs, rest):
+                    return
+                errors.append('HLS não convertível (fMP4/criptografado)')
+                continue
+            if is_hls != (kind == 'm3u8'):
+                errors.append('formato diferente')   # reserva de outro tipo não serve neste endereço
+                continue
+            _good[cid] = (i, time.time())
+            if is_hls:
+                body = (first + resp.read(4 * 1024 * 1024)).decode('utf-8', 'replace')
+                return _send_bytes(handler, _rewrite(body, final, cid, i, t), 'application/vnd.apple.mpegurl')
+            return _pipe(handler, resp, first, ctype)
+        finally:
+            resp.close()
+    _good.pop(cid, None)
+    return handler.send_json(502, {'error': 'Nenhuma fonte respondeu', 'detalhes': errors[:4]})
+
+
+def segment(handler, q, t):
+    """Sub-listas e pedaços HLS repassados com os cabeçalhos da fonte."""
+    if not valid_token(t):
+        return handler.send_json(403, {'error': 'Chave inválida'})
+    cid, url = q.get('c', ''), q.get('u', '')
+    try:
+        sidx = int(q.get('s', '0'))
+    except ValueError:
+        return handler.send_json(400, {'error': 'Fonte inválida'})
+    srcs = sources_for(cid)
+    if not srcs or not 0 <= sidx < len(srcs) or not url.startswith(('http://', 'https://')):
+        return handler.send_json(404, {'error': 'Fonte não encontrada'})
+    src = srcs[sidx]
+    try:
+        resp = _open(url, src['ua'], src['referer'], timeout=20)
+    except HTTPError as e:
+        return handler.send_json(e.code if 400 <= e.code < 600 else 502, {'error': f'HTTP {e.code}'})
+    except Exception as exc:
+        return handler.send_json(502, {'error': str(exc)[:120]})
+    try:
+        final = resp.geturl()
+        ctype = (resp.headers.get('Content-Type') or '').split(';')[0].strip().lower()
+        first = resp.read(7)
+        if first.lstrip(b'\xef\xbb\xbf').startswith(b'#EXTM3U') or 'mpegurl' in ctype:
+            body = (first + resp.read(4 * 1024 * 1024)).decode('utf-8', 'replace')
+            return _send_bytes(handler, _rewrite(body, final, cid, sidx, t), 'application/vnd.apple.mpegurl')
+        return _pipe(handler, resp, first, ctype)
+    finally:
+        resp.close()
+
+
+# ------------------------------------------------------------------ HLS -> TS contínuo (para o Jellyfin)
+# O ffmpeg do Jellyfin lida mal com HLS ao vivo: se a lista atrasa, ele acha que o canal acabou
+# (e, com "repetir transmissões", volta para o começo). Aqui o indexador acompanha a lista HLS e
+# entrega os pedaços num único fluxo MPEG-TS sem fim, como o Dispatcharr faz.
+TS_SYNC = 0x47
+BW_ATTR = re.compile(r'BANDWIDTH=(\d+)')
+
+
+class _NotTs(Exception):
+    """Fonte HLS que não dá para emendar (pedaços fMP4 ou criptografados)."""
+
+
+def _fetch_text(url, src, timeout=10):
+    with _open(url, src['ua'], src['referer'], timeout=timeout) as r:
+        return r.geturl(), r.read(4 * 1024 * 1024).decode('utf-8', 'replace')
+
+
+def _parse_media(text, base):
+    """Lista de mídia: (segmentos [(seq, url, dur)], duração alvo, terminou?)."""
+    seq, target, ended, segs, dur = 0, 6.0, False, [], 0.0
+    for line in text.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        if s.startswith('#EXT-X-MEDIA-SEQUENCE:'):
+            try:
+                seq = int(s.split(':', 1)[1])
+            except ValueError:
+                pass
+        elif s.startswith('#EXT-X-TARGETDURATION:'):
+            try:
+                target = float(s.split(':', 1)[1])
+            except ValueError:
+                pass
+        elif s.startswith('#EXT-X-ENDLIST'):
+            ended = True
+        elif s.startswith('#EXT-X-MAP'):
+            raise _NotTs('pedaços fMP4')
+        elif s.startswith('#EXT-X-KEY') and 'METHOD=NONE' not in s.upper():
+            raise _NotTs('pedaços criptografados')
+        elif s.startswith('#EXTINF:'):
+            try:
+                dur = float(s[8:].split(',', 1)[0])
+            except ValueError:
+                dur = target
+        elif not s.startswith('#'):
+            segs.append((seq, urljoin(base, s), dur or target))
+            seq += 1
+            dur = 0.0
+    return segs, max(1.0, min(target, 15.0)), ended
+
+
+def _media_playlist(url, src):
+    """Abre a lista; se for a principal (com qualidades), escolhe a de maior qualidade."""
+    final, text = _fetch_text(url, src)
+    if '#EXT-X-STREAM-INF' not in text:
+        return final, text
+    best, best_bw, bw = None, -1, 0
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith('#EXT-X-STREAM-INF'):
+            m = BW_ATTR.search(s)
+            bw = int(m.group(1)) if m else 0
+        elif s and not s.startswith('#'):
+            if bw > best_bw:
+                best, best_bw = urljoin(final, s), bw
+            bw = 0
+    if not best:
+        raise _NotTs('lista sem qualidades')
+    return _fetch_text(best, src)
+
+
+def _hls_to_ts(handler, cid, srcs, order):
+    """Entrega a fonte HLS como um fluxo TS contínuo; troca para a reserva se a fonte cair."""
+    started = False
+    deadline_fail = 45            # segundos sem conseguir nada -> troca de fonte
+    for attempt in range(len(order) * 2):          # dá uma segunda volta pelas fontes
+        i = order[attempt % len(order)]
+        src = srcs[i]
+        try:
+            url, text = _media_playlist(src['url'], src)
+            segs, target, ended = _parse_media(text, url)
+        except _NotTs:
+            if not started:
+                return False      # quem chamou responde com erro de formato
+            continue
+        except Exception:
+            continue
+        if not segs:
+            continue
+        _good[cid] = (i, time.time())
+        # começa perto do ao vivo (3 pedaços antes do fim), como os players fazem
+        last = segs[max(0, len(segs) - 3)][0] - 1
+        seen_urls = set()
+        last_ok = time.time()
+        while True:
+            new = [s for s in segs if s[0] > last and s[1] not in seen_urls]
+            if segs and segs[-1][0] < last - 50:    # a fonte reiniciou a numeração
+                new = segs[-3:]
+            for seq, seg_url, _ in new:
+                last = max(last, seq)
+                seen_urls.add(seg_url)
+                if len(seen_urls) > 200:
+                    seen_urls = set(list(seen_urls)[-100:])
+                data = None
+                for _try in range(2):
+                    try:
+                        with _open(seg_url, src['ua'], src['referer'], timeout=20) as r:
+                            data = r.read(64 * 1024 * 1024)
+                        break
+                    except Exception:
+                        time.sleep(0.5)
+                if not data:
+                    continue                     # pula o pedaço perdido em vez de travar
+                if data[0] != TS_SYNC:
+                    if not started:
+                        return False             # não é MPEG-TS (ex.: AAC puro / fMP4)
+                    continue
+                if not started:
+                    handler.send_response(200)
+                    handler.send_header('Content-Type', 'video/mp2t')
+                    handler.send_header('Cache-Control', 'no-store')
+                    handler.send_header('Access-Control-Allow-Origin', '*')
+                    handler.send_header('Connection', 'close')
+                    handler.end_headers()
+                    started = True
+                try:
+                    handler.wfile.write(data)
+                    handler.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    return True                  # o player fechou
+                last_ok = time.time()
+            if ended:
+                return True                      # VOD disfarçado de canal: termina, não repete
+            if time.time() - last_ok > deadline_fail:
+                break                            # fonte parou: tenta a próxima
+            time.sleep(target / 2 if not new else min(1.0, target / 3))
+            try:
+                url, text = _media_playlist(src['url'], src)
+                segs, target, ended = _parse_media(text, url)
+            except _NotTs:
+                break
+            except Exception:
+                segs = []                        # erro temporário: tenta de novo na próxima volta
+    if started:
+        return True
+    return False
 
 
 # ------------------------------------------------------------------ logos
@@ -372,15 +882,19 @@ def valid_token(t):
     return bool(t) and secrets.compare_digest(str(t), token())
 
 
-def playlist(t, base=''):
-    """Lista M3U. [base] = endereço público do indexador (para apontar o guia de programação)."""
+def playlist(t, base='', fmt=''):
+    """Lista M3U. [base] = endereço público do indexador (para apontar o guia de programação).
+
+    fmt='ts': todos os canais pelo indexador como MPEG-TS contínuo (ideal para o Jellyfin)."""
     if not valid_token(t):
         return None
     import epg
     with connect() as c:
         only_ok = _setting(c, 'only_ok', '1') == '1'
         guide = _setting(c, 'epg_url')
+        mode = _setting(c, 'stream_mode', 'auto')
         rows = [dict(r) for r in c.execute('SELECT * FROM selected ORDER BY position, added_at')]
+        with_alts = {r[0] for r in c.execute('SELECT DISTINCT channel_id FROM alternates')}
         mapped = c.execute('SELECT 1 FROM selected WHERE epg_channel IS NOT NULL LIMIT 1').fetchone()
     if mapped and base:
         guide = f'{base}/strm-api/channels.xml?t={t}'   # nosso guia, só com os canais da lista
@@ -396,5 +910,17 @@ def playlist(t, base=''):
             attrs.append(f'tvg-chno="{r["number"]}"')
         attrs.append(f'group-title="{_attr(r["group_title"])}"')
         lines.append(f'#EXTINF:-1 {" ".join(attrs)},{_attr(r["name"])}')
-        lines.append(r['url'])
+        # Pelo indexador: envia os cabeçalhos exigidos e troca para a reserva se a fonte cair
+        needs = bool(r['ua'] or r['referer']) or r['id'] in with_alts
+        if base and fmt == 'ts':
+            lines.append(f'{base}/strm-api/ch/{r["id"]}.ts?t={t}')
+        elif base and (mode == 'proxy' or (mode == 'auto' and needs)):
+            kind = 'm3u8' if urlsplit(r['url']).path.lower().endswith('.m3u8') else 'ts'
+            lines.append(f'{base}/strm-api/ch/{r["id"]}.{kind}?t={t}')
+        else:
+            if r['ua']:
+                lines.append(f'#EXTVLCOPT:http-user-agent={r["ua"]}')
+            if r['referer']:
+                lines.append(f'#EXTVLCOPT:http-referrer={r["referer"]}')
+            lines.append(r['url'])
     return '\n'.join(lines) + '\n'

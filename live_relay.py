@@ -43,7 +43,8 @@ def _check(url):
     p = urlsplit(url or '')
     if p.scheme not in ('http', 'https') or not p.hostname:
         raise ValueError('Endereço inválido')
-    media._public_host(url)  # bloqueia localhost/rede interna
+    import epg
+    epg._check(url)  # bloqueia localhost/rede interna, exceto o próprio indexador e INDEXER_TRUSTED_HOSTS
 
 
 def _download(url, limit):

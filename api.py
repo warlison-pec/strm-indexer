@@ -10,6 +10,7 @@ import media_control as media
 import playlist_admin as playlists
 import tmdb_meta as tmdb
 import series_bulk as bulk
+import series_watch
 import catalog_enrich as enrich
 import metadata_auto as automatic
 import tvdb_meta as tvdb
@@ -283,7 +284,13 @@ class Handler(BaseHTTPRequestHandler):
                 elif parsed.path == '/channels/renumber':
                     r = channels.renumber(d.get('start', 1))
                 elif parsed.path == '/channels/settings':
-                    r = channels.save_settings(d.get('epg_url'), d.get('only_ok'), bool(d.get('new_token')), d.get('link_base'))
+                    r = channels.save_settings(d.get('epg_url'), d.get('only_ok'), bool(d.get('new_token')), d.get('link_base'), d.get('stream_mode'))
+                elif parsed.path == '/channels/alternates/find':
+                    r = channels.find_alternates(d.get('ids'))
+                elif parsed.path == '/channels/alternates/remove':
+                    r = channels.remove_alternate(d.get('id'), d.get('alt'))
+                elif parsed.path == '/channels/alternates/promote':
+                    r = channels.promote_alternate(d.get('id'), d.get('alt'))
                 elif parsed.path == '/channels/test':
                     r = channels.start_test(d.get('ids'), bool(d.get('only_untested')))
                 elif parsed.path == '/channels/epg/add':
@@ -340,6 +347,15 @@ class Handler(BaseHTTPRequestHandler):
                         result['import'] = {'started': False}   # já havia uma indexação rodando
                 return self.send_json(200, result)
             except (ValueError, OSError, TypeError) as exc:
+                return self.send_json(400, {'error': str(exc)})
+        if parsed.path in ('/series/watch', '/series/watch/check'):
+            if not self.guard(mutable=True): return
+            try:
+                data = self._json_body(4096)
+                if parsed.path == '/series/watch/check':
+                    return self.send_json(200, series_watch.check_now())
+                return self.send_json(200, series_watch.watch(data.get('title'), data.get('source', ''), data.get('season'), bool(data.get('on', True))))
+            except (ValueError, TypeError) as exc:
                 return self.send_json(400, {'error': str(exc)})
         if parsed.path in ('/playlists/github', '/playlists/refresh', '/playlists/reindex', '/tmdb/apply', '/tmdb/apply-series', '/series/batch'):
             if not self.guard(mutable=True): return
@@ -509,8 +525,16 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlsplit(self.path)
         # Lista de canais gerada: pública, protegida pela chave na URL (?t=...)
         if parsed.path in ('/channels/list.m3u', '/strm-api/channels.m3u', '/jf/channels.m3u'):
-            text = channels.playlist(parse_qs(parsed.query).get('t', [''])[0], self.public_base())
+            qs = parse_qs(parsed.query)
+            text = channels.playlist(qs.get('t', [''])[0], self.public_base(), qs.get('fmt', [''])[0])
             return self.send_m3u(text) if text is not None else self.send_json(403, {'error': 'Chave inválida'})
+        # Canal repassado pelo indexador (cabeçalhos exigidos + troca automática para a reserva)
+        m = re.fullmatch(r'/(?:strm-api|jf)/ch/([0-9a-f]{16})\.(m3u8|ts)', parsed.path)
+        if m:
+            return channels.stream(self, m.group(1), m.group(2), parse_qs(parsed.query).get('t', [''])[0])
+        if parsed.path in ('/strm-api/ch/seg', '/jf/ch/seg'):
+            q = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+            return channels.segment(self, q, q.get('t', ''))
         if parsed.path in ('/channels/guide.xml', '/strm-api/channels.xml', '/jf/channels.xml'):
             if not channels.valid_token(parse_qs(parsed.query).get('t', [''])[0]):
                 return self.send_json(403, {'error': 'Chave inválida'})
@@ -531,6 +555,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json(200, channels.selected())
                 if parsed.path == '/channels/test':
                     return self.send_json(200, channels.test_status())
+                if parsed.path == '/channels/alternates':
+                    return self.send_json(200, channels.alternates(arg('id')))
                 if parsed.path == '/channels/epg':
                     return self.send_json(200, epg.summary())
                 if parsed.path == '/channels/epg/search':
@@ -581,6 +607,15 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path.startswith('/preview/'):
             url = media.preview_url(parsed.path[len('/preview/'):])
             return self.send_redirect(url) if url else self.send_json(410, {'error': 'Prévia expirada'})
+        if parsed.path in ('/series/watch', '/series/watched'):
+            if not self.guard(): return
+            try:
+                args = parse_qs(parsed.query)
+                if parsed.path == '/series/watched':
+                    return self.send_json(200, series_watch.listing())
+                return self.send_json(200, series_watch.status(args.get('title', [''])[0], args.get('source', [''])[0]))
+            except (ValueError, TypeError) as exc:
+                return self.send_json(400, {'error': str(exc)})
         if parsed.path in ('/series/job','/series/pending'):
             if not self.guard(): return
             try:
@@ -683,6 +718,8 @@ if __name__ == '__main__':
     threading.Thread(target=automatic.loop,args=(threading.Event(),),daemon=True).start()
     bulk.setup()
     threading.Thread(target=bulk.loop,args=(threading.Event(),),daemon=True).start()
+    series_watch.setup()
+    threading.Thread(target=series_watch.loop, args=(threading.Event(),), daemon=True, name='series-watch').start()
     threading.Thread(target=media.run_monitor, args=(threading.Event(),), daemon=True).start()
     bridge.setup()
     threading.Thread(target=bridge.loop, args=(threading.Event(),), daemon=True).start()

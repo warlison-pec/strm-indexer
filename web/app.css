@@ -559,3 +559,23 @@ input[type=url]:focus,input[type=text]:focus{border-color:rgba(139,124,255,.55);
 .file-edit-name input{flex:1}
 .file-edit-name em{font-style:normal;color:var(--muted);font-size:12.5px}
 .file-name small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* Fontes reserva */
+.ch-alt{flex:none;height:26px;padding:0 8px;border-radius:20px;border:1px solid var(--line);background:var(--surface);color:var(--text2);font-size:11.5px;cursor:pointer;white-space:nowrap}
+.ch-alt.has{color:#ffd28a;border-color:rgba(255,190,90,.35);background:rgba(255,190,90,.08)}
+.ch-alt:hover{border-color:var(--line2);color:#fff}
+.alt-list{display:flex;flex-direction:column;gap:6px;overflow:auto;min-height:0}
+.alt-row{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:11px;background:var(--bg2);border:1px solid var(--line)}
+.alt-row.main{border-color:rgba(139,124,255,.45)}
+.alt-row .ch-name small{white-space:normal}
+.ch-mode{flex-wrap:wrap;margin-bottom:6px}
+
+/* Séries monitoradas */
+.side-stack{display:flex;flex-direction:column;gap:16px;min-width:0}
+.watch-info{margin:0 0 8px}
+.watch-list{display:flex;flex-direction:column;gap:6px;max-height:340px;overflow:auto}
+.watch-row{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;background:var(--bg2);border:1px solid var(--line)}
+.watch-row div{flex:1;min-width:0}
+.watch-row strong{display:block;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.watch-row small{display:block;color:var(--muted);font-size:12px}
+.watch-toggle{margin-top:10px}

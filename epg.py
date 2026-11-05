@@ -39,7 +39,9 @@ def trusted_hosts():
     Docker). Configure no .env:  INDEXER_TRUSTED_HOSTS=192.168.1.16:3001,outro:8080
     Por segurança, qualquer outro endereço interno continua bloqueado."""
     from jellyfin_bridge import _env
-    return {h.strip().lower() for h in _env('INDEXER_TRUSTED_HOSTS').split(',') if h.strip()}
+    port = os.environ.get('INDEXER_PORT', '8794')
+    own = {f'127.0.0.1:{port}', f'localhost:{port}'}   # o próprio indexador (lista e canais gerados por ele)
+    return own | {h.strip().lower() for h in _env('INDEXER_TRUSTED_HOSTS').split(',') if h.strip()}
 
 
 def _check(url):
