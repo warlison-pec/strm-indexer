@@ -568,7 +568,9 @@ function chWatchTest() {
 function renderOutput() {
   // /strm-api/ é o caminho que o túnel publica; também funciona direto no servidor
   const t = encodeURIComponent(ch.token);
-  const url = `${location.origin}/strm-api/channels.m3u?t=${t}`, guide = `${location.origin}/strm-api/channels.xml?t=${t}`;
+  const base = ch.settings.link_base || location.origin;   // ex.: endereço da rede local, mais rápido
+  const url = `${base}/strm-api/channels.m3u?t=${t}`, guide = `${base}/strm-api/channels.xml?t=${t}`;
+  if (document.activeElement !== $('chBase')) $('chBase').value = ch.settings.link_base || '';
   $('chUrl').value = url; $('chDownload').href = url;
   $('chGuideUrl').value = guide; $('chGuideDownload').href = guide;
   $('chOnlyOk').checked = !!ch.settings.only_ok;
@@ -666,6 +668,13 @@ document.querySelectorAll('[data-copy]').forEach(btn => btn.addEventListener('cl
 $('chSaveSettings').addEventListener('click', async () => {
   try { const r = await post('/channels/settings', { only_ok: $('chOnlyOk').checked }); ch.settings = r.settings; toast('Configuração salva', 'ok'); }
   catch (e) { toast(e.message, 'bad'); }
+});
+$('chBaseSave').addEventListener('click', async () => {
+  try {
+    const r = await post('/channels/settings', { link_base: $('chBase').value });
+    ch.settings = r.settings; renderOutput();
+    toast(r.settings.link_base ? 'Links agora usam ' + r.settings.link_base : 'Links usam o endereço deste painel', 'ok');
+  } catch (e) { toast(e.message, 'bad'); }
 });
 $('chNewToken').addEventListener('click', async () => {
   if (!window.confirm('Gerar uma nova chave? O endereço antigo da lista para de funcionar.')) return;
@@ -1541,13 +1550,44 @@ async function loadSources() {
         ref.addEventListener('click', () => busy(ref, () => playlistAction(() => post('/playlists/refresh', { filename: f.name }), 'Lista atualizada')));
         actions.append(ref);
       }
-      grid.append(h('div', { class: 'file' },
+      const card = h('div', { class: 'file' });
+      const edit = btn('Editar', { cls: 'sm ghost', ico: 'file', title: 'Renomear' + (f.github ? ' ou trocar o link' : '') });
+      edit.addEventListener('click', () => editPlaylist(card, f));
+      const del = btn('Excluir', { cls: 'sm ghost danger', ico: 'trash', title: 'Apagar esta lista' });
+      del.addEventListener('click', () => {
+        if (!window.confirm(`Excluir a lista "${f.name}"?\n\nOs títulos e canais que só existem nela saem do catálogo após a reindexação. O que já foi adicionado ao Jellyfin continua lá.`)) return;
+        busy(del, () => playlistAction(() => post('/playlists/delete', { filename: f.name }), 'Lista excluída'));
+      });
+      actions.append(edit, del);
+      card.append(
         h('div', { class: 'file-top' }, h('span', { class: 'file-ico' }, icon(f.github ? 'github' : 'file')),
-          h('div', { class: 'file-name' }, h('strong', { text: f.name, title: f.name }), h('small', { text: bytes(f.size) }))),
+          h('div', { class: 'file-name' }, h('strong', { text: f.name, title: f.name }), h('small', { text: bytes(f.size) + (f.url ? ' · ' + f.url.replace(/^https:\/\/raw\.githubusercontent\.com\//, '') : ''), title: f.url || '' }))),
         h('div', { class: 'file-stats' }, pill(n !== undefined ? fmt(n) + ' entradas' : 'não indexada', n !== undefined ? 'info' : 'warn'), pill(f.github ? 'GitHub' : 'Upload local', 'plain')),
-        bar, actions.childElementCount ? actions : null));
+        bar, actions);
+      grid.append(card);
     }
   } catch (e) { grid.replaceChildren(emptyState('alert', 'Falha ao listar arquivos', e.message)); }
+}
+
+/* Editar lista: renomear e, se veio do GitHub, trocar o link */
+function editPlaylist(card, f) {
+  if (card.querySelector('.file-edit')) return;
+  const ext = f.name.match(/\.m3u8?$/i)?.[0] || '.m3u';
+  const name = h('input', { value: f.name.slice(0, -ext.length), placeholder: 'Nome da lista', attrs: { 'aria-label': 'Nome da lista' } });
+  const url = f.github ? h('input', { type: 'url', value: f.url || '', placeholder: 'Link raw do GitHub', attrs: { 'aria-label': 'Link do GitHub' } }) : null;
+  const save = btn('Salvar', { cls: 'sm primary', ico: 'check' });
+  const cancel = btn('Cancelar', { cls: 'sm ghost' });
+  const form = h('div', { class: 'file-edit' },
+    h('label', {}, h('span', { text: 'Nome' }), h('span', { class: 'file-edit-name' }, name, h('em', { text: ext }))),
+    url ? h('label', {}, h('span', { text: 'Link do GitHub' }), url) : null,
+    h('div', { class: 'batch-row' }, save, cancel));
+  card.append(form); name.focus(); name.select();
+  cancel.addEventListener('click', () => form.remove());
+  const submit = () => busy(save, () => playlistAction(() => post('/playlists/edit', {
+    filename: f.name, new_name: name.value.trim() + ext, url: url && url.value.trim() !== (f.url || '') ? url.value.trim() : undefined,
+  }), 'Lista atualizada'));
+  save.addEventListener('click', submit);
+  form.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') form.remove(); });
 }
 
 function bytes(n) {
@@ -1582,7 +1622,8 @@ async function afterImport(st) {
 async function playlistAction(fn, okMsg = 'Lista recebida') {
   try {
     const r = await fn();
-    toast(okMsg + (r.filename ? ': ' + r.filename : '') + ' · indexação iniciada', 'ok');
+    if (r.changed === false) toast('Nada foi alterado', 'info');
+    else toast(okMsg + (r.filename ? ': ' + r.filename : '') + ' · indexação iniciada', 'ok');
   } catch (e) { toast('Erro: ' + e.message, 'bad', 6000); }
   await loadSources();
 }

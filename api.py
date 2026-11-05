@@ -283,7 +283,7 @@ class Handler(BaseHTTPRequestHandler):
                 elif parsed.path == '/channels/renumber':
                     r = channels.renumber(d.get('start', 1))
                 elif parsed.path == '/channels/settings':
-                    r = channels.save_settings(d.get('epg_url'), d.get('only_ok'), bool(d.get('new_token')))
+                    r = channels.save_settings(d.get('epg_url'), d.get('only_ok'), bool(d.get('new_token')), d.get('link_base'))
                 elif parsed.path == '/channels/test':
                     r = channels.start_test(d.get('ids'), bool(d.get('only_untested')))
                 elif parsed.path == '/channels/epg/add':
@@ -324,6 +324,22 @@ class Handler(BaseHTTPRequestHandler):
                 result['import'] = playlists.start_import()
                 return self.send_json(200, result)
             except (ValueError, OSError) as exc:
+                return self.send_json(400, {'error': str(exc)})
+        if parsed.path in ('/playlists/delete', '/playlists/edit'):
+            if not self.guard(mutable=True): return
+            try:
+                data = self._json_body(4096)
+                if parsed.path == '/playlists/delete':
+                    result = playlists.remove(data.get('filename', ''))
+                else:
+                    result = playlists.edit(data.get('filename', ''), data.get('new_name'), data.get('url'))
+                if result.get('removed') or result.get('changed'):
+                    try:
+                        result['import'] = playlists.start_import()
+                    except ValueError:
+                        result['import'] = {'started': False}   # já havia uma indexação rodando
+                return self.send_json(200, result)
+            except (ValueError, OSError, TypeError) as exc:
                 return self.send_json(400, {'error': str(exc)})
         if parsed.path in ('/playlists/github', '/playlists/refresh', '/playlists/reindex', '/tmdb/apply', '/tmdb/apply-series', '/series/batch'):
             if not self.guard(mutable=True): return

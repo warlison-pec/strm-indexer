@@ -78,3 +78,9 @@ Em **Fontes de guia (EPG)** você cadastra guias XMLTV (`.xml` ou `.xml.gz`).
 - **Arquivos grandes:** são lidos em fluxo; um guia de 70 MB é processado em segundos com pouca memória.
 
 No Jellyfin: **Painel → TV ao vivo**, adicione a lista como sintonizador M3U e o guia como provedor XMLTV.
+
+Por segurança, fontes em endereços internos (`192.168…`, `10…`, `localhost`) são bloqueadas. Para usar um gerador de EPG da sua rede, por exemplo um container em `http://192.168.1.16:3001/guide.xml`, libere só ele no `.env` e reinicie:
+
+```
+INDEXER_TRUSTED_HOSTS=192.168.1.16:3001
+```

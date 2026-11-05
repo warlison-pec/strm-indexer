@@ -13,6 +13,7 @@ import shutil
 import threading
 import time
 import xml.etree.ElementTree as ET
+from urllib.parse import urlsplit
 from urllib.request import Request
 from xml.sax.saxutils import escape, quoteattr
 
@@ -30,6 +31,33 @@ UA = 'STRMIndexer-EPG/1.0'
 _lock = threading.Lock()            # uma geração/atualização por vez
 _wake = threading.Event()
 state = {'running': False, 'message': '', 'dirty': True}
+
+
+# ------------------------------------------------------------------ endereços internos confiáveis
+def trusted_hosts():
+    """Servidores da sua rede que podem ser usados como fonte de guia (ex.: um gerador de EPG em
+    Docker). Configure no .env:  INDEXER_TRUSTED_HOSTS=192.168.1.16:3001,outro:8080
+    Por segurança, qualquer outro endereço interno continua bloqueado."""
+    from jellyfin_bridge import _env
+    return {h.strip().lower() for h in _env('INDEXER_TRUSTED_HOSTS').split(',') if h.strip()}
+
+
+def _check(url):
+    p = urlsplit(url or '')
+    if p.scheme not in ('http', 'https') or not p.hostname or p.username or p.password:
+        raise ValueError('Endereço inválido')
+    host = p.hostname.lower()
+    port = p.port or (443 if p.scheme == 'https' else 80)
+    trusted = trusted_hosts()
+    if f'{host}:{port}' in trusted or (host in trusted and p.port is None):
+        return
+    try:
+        media._public_host(url)
+    except ValueError as exc:
+        if 'interno' in str(exc) or 'local' in str(exc).lower():
+            raise ValueError(f'Endereço interno bloqueado. Para liberar esta fonte, adicione '
+                             f'INDEXER_TRUSTED_HOSTS={host}:{port} no arquivo .env do indexador e reinicie.') from None
+        raise
 
 
 # ------------------------------------------------------------------ banco
@@ -78,7 +106,7 @@ def add_source(url, name=''):
     url = (url or '').strip()
     if not re.match(r'^https?://', url) or len(url) > 1000:
         raise ValueError('Informe um endereço http:// ou https:// de um guia XMLTV')
-    media._public_host(url)
+    _check(url)
     with channels.connect() as c:
         if c.execute('SELECT 1 FROM epg_sources WHERE url=?', (url,)).fetchone():
             raise ValueError('Essa fonte já foi adicionada')
@@ -101,7 +129,7 @@ def remove_source(sid):
 def _download(row):
     """Baixa a fonte para o disco (descompacta .gz) e indexa os canais dela."""
     url = row['url']
-    media._public_host(url)
+    _check(url)
     tmp = DIR / f'src-{row["id"]}.part'
     req = Request(url, headers={'User-Agent': UA, 'Accept': '*/*', 'Accept-Encoding': 'gzip'})
     with media.OPENER.open(req, timeout=90) as resp, open(tmp, 'wb') as out:
@@ -184,8 +212,9 @@ _STRIP = re.compile(r'\b(hd|fhd|sd|4k|uhd|h265|hevc|alt|backup|br|\d{3,4}p)\b', 
 
 
 def _candidates_for(c, tvg_id, name):
-    if tvg_id:
-        row = c.execute('SELECT source_id, id FROM epg_channels WHERE id=? COLLATE NOCASE ORDER BY source_id LIMIT 1', (tvg_id,)).fetchone()
+    # tvg-id exato; depois sem a variante depois do "@" (listas iptv-org usam "Canal.br@HD")
+    for tid in dict.fromkeys(filter(None, [tvg_id, (tvg_id or '').split('@')[0]])):
+        row = c.execute('SELECT source_id, id FROM epg_channels WHERE id=? COLLATE NOCASE ORDER BY source_id LIMIT 1', (tid,)).fetchone()
         if row:
             return row
     key = _norm(_STRIP.sub(' ', name or ''))

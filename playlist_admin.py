@@ -171,9 +171,75 @@ def refresh(name):
         LOCK.release()
 
 
+def remove(name):
+    """Apaga uma lista (arquivo e link cadastrado). O catálogo é reindexado em seguida."""
+    name = filename(name)
+    target = ROOT / name
+    if not target.is_file():
+        raise ValueError('Lista não encontrada')
+    if not LOCK.acquire(blocking=False):
+        raise ValueError('Outra atualização de playlist está em andamento')
+    try:
+        target.unlink()
+        registry = _registry()
+        if registry.pop(name, None) is not None:
+            _save_registry(registry)
+        return {'filename': name, 'removed': True}
+    finally:
+        LOCK.release()
+
+
+def edit(name, new_name=None, url=None):
+    """Renomeia a lista e/ou troca o link do GitHub (baixando de novo). Reindexa em seguida."""
+    name = filename(name)
+    source = ROOT / name
+    if not source.is_file():
+        raise ValueError('Lista não encontrada')
+    registry = _registry()
+    final = name
+    if new_name not in (None, ''):
+        new_name = str(new_name).strip()
+        if not new_name.lower().endswith(('.m3u', '.m3u8')):
+            new_name += source.suffix          # mantém a extensão se o usuário não digitar
+        final = filename(new_name)
+    if url not in (None, '') and name not in registry:
+        raise ValueError('Só listas importadas por link do GitHub têm link para editar')
+    clean = github_raw_url(url) if url not in (None, '') else None
+    if final == name and (clean is None or clean == registry.get(name)):
+        return {'filename': name, 'changed': False}
+    if not LOCK.acquire(blocking=False):
+        raise ValueError('Outra atualização de playlist está em andamento')
+    try:
+        if final != name:
+            if (ROOT / final).exists():
+                raise ValueError('Já existe uma lista com esse nome')
+            os.replace(source, ROOT / final)
+            if name in registry:
+                registry[final] = registry.pop(name)
+        if clean is not None:
+            req = Request(clean, headers={'User-Agent': 'STRMIndexer/0.5', 'Accept': 'text/plain, */*'})
+            with OPENER.open(req, timeout=25) as response:
+                if response.status != 200:
+                    raise ValueError('O GitHub não retornou HTTP 200')
+                _write_stream(ROOT / final, response)
+            registry[final] = clean
+        _save_registry(registry)
+    finally:
+        LOCK.release()
+    if final != name:
+        # a seleção de canais guarda o nome da lista de origem só como informação
+        try:
+            import channels
+            with channels.connect() as c:
+                c.execute('UPDATE selected SET source=? WHERE source=?', (final, name))
+        except Exception:
+            pass
+    return {'filename': final, 'changed': True}
+
+
 def status():
     return {**JOB, 'files': [
-        {'name': p.name, 'size': p.stat().st_size, 'github': p.name in _registry()}
+        {'name': p.name, 'size': p.stat().st_size, 'github': p.name in _registry(), 'url': _registry().get(p.name, '')}
         for p in sorted(ROOT.iterdir()) if p.is_file() and p.suffix.lower() in indexer.SUPPORTED
     ] if ROOT.exists() else []}
 

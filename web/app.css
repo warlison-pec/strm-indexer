@@ -548,3 +548,14 @@ input[type=url]:focus,input[type=text]:focus{border-color:rgba(139,124,255,.55);
 .epg-results .cat-item small{max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ch-settings{grid-template-columns:1fr auto}
 .ch-hint-top{margin-top:0}
+
+/* Editar / excluir listas */
+.btn.danger{color:#ff8da0}
+.btn.danger:hover{background:rgba(255,77,106,.12);color:#ff6b82}
+.file-edit{display:flex;flex-direction:column;gap:10px;padding-top:12px;border-top:1px solid var(--line)}
+.file-edit label{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--text2)}
+.file-edit input{height:38px;border-radius:10px;border:1px solid var(--line2);background:var(--bg2);color:#fff;padding:0 10px;font:inherit;font-size:13px;min-width:0}
+.file-edit-name{display:flex;align-items:center;gap:6px}
+.file-edit-name input{flex:1}
+.file-edit-name em{font-style:normal;color:var(--muted);font-size:12.5px}
+.file-name small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

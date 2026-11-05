@@ -191,6 +191,8 @@
       </div>
       <div class="panel ch-out">
         <div class="panel-head"><h3><svg><use href="#i-file"/></svg>Lista gerada</h3></div>
+        <label class="ch-label">Endereço do servidor nos links <small class="muted">· vazio = o endereço deste painel</small></label>
+        <div class="ch-url"><input id="chBase" placeholder="ex.: http://192.168.1.16:8794 (rede local)" autocomplete="off"><button class="btn" id="chBaseSave" type="button"><svg><use href="#i-check"/></svg>Usar</button></div>
         <label class="ch-label">Lista de canais (M3U)</label>
         <div class="ch-url"><input id="chUrl" readonly><button class="btn" data-copy="chUrl" type="button"><svg><use href="#i-copy"/></svg>Copiar</button><a class="btn ghost" id="chDownload" download="canais.m3u">Baixar</a></div>
         <label class="ch-label">Guia de programação (XMLTV) <small class="muted" id="chEpgInfo"></small></label>

@@ -167,7 +167,8 @@ def facets(source=''):
 def selected():
     with connect() as c:
         rows = [dict(r) for r in c.execute('SELECT * FROM selected ORDER BY position, added_at')]
-        settings = {'epg_url': _setting(c, 'epg_url'), 'only_ok': _setting(c, 'only_ok', '1') == '1'}
+        settings = {'epg_url': _setting(c, 'epg_url'), 'only_ok': _setting(c, 'only_ok', '1') == '1',
+                    'link_base': _setting(c, 'link_base')}
     import epg
     names = epg.labels()
     for r in rows:
@@ -264,8 +265,14 @@ def renumber(start=1):
     return {'ok': True}
 
 
-def save_settings(epg_url=None, only_ok=None, new_token=False):
+def save_settings(epg_url=None, only_ok=None, new_token=False, link_base=None):
     with connect() as c:
+        if link_base is not None:
+            # Endereço usado nos links mostrados no painel (ex.: http://192.168.1.16:8794 na rede local)
+            link_base = str(link_base).strip().rstrip('/')
+            if link_base and not re.fullmatch(r'https?://[A-Za-z0-9.\-]+(:\d{1,5})?', link_base):
+                raise ValueError('Use só protocolo, endereço e porta, ex.: http://192.168.1.16:8794')
+            _set_setting(c, 'link_base', link_base)
         if epg_url is not None:
             epg_url = str(epg_url).strip()
             if epg_url and not re.match(r'^https?://', epg_url):
