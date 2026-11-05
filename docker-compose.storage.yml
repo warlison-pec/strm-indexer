@@ -1,0 +1,7 @@
+services:
+  strm-indexer:
+    environment:
+      INDEXER_EXPORT_DIR: /app/export
+    volumes:
+      - /mnt/sdc1/Filmes/STRM Indexer:/app/export/Filmes:rw
+      - /mnt/sdc1/Series/STRM Indexer:/app/export/Series:rw

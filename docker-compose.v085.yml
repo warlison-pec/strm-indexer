@@ -1,0 +1,6 @@
+services:
+  strm-indexer:
+    environment:
+      INDEXER_SEERR_URL: ${INDEXER_SEERR_URL:-}
+      INDEXER_SEERR_API_KEY: ${INDEXER_SEERR_API_KEY:-}
+      INDEXER_SEERR_GAP_SECONDS: ${INDEXER_SEERR_GAP_SECONDS:-15}

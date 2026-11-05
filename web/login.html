@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#06080d">
+<meta name="color-scheme" content="dark">
+<title>Entrar · STRM Indexer</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body class="login-page">
+<svg class="sprite" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+  <symbol id="i-logo" viewBox="0 0 32 32"><rect x="3" y="6" width="26" height="20" rx="5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M13 11.5v9l7.5-4.5z" fill="currentColor"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="10" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8.5 10.5V8a3.5 3.5 0 017 0v2.5" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+</svg>
+
+<section class="login-art" aria-hidden="true">
+  <div class="reels"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+  <a class="brand"><span class="brand-mark"><svg><use href="#i-logo"/></svg></span><span class="brand-text"><strong>STRM Indexer</strong><small>Media catalog</small></span></a>
+  <div>
+    <h2>Seu catálogo, <em>organizado</em> para o Jellyfin.</h2>
+    <p>Indexe listas M3U, valide as fontes e gere bibliotecas de filmes e séries com capas e metadados.</p>
+  </div>
+</section>
+
+<main class="login-side">
+  <div class="login-panel">
+    <span class="brand-mark"><svg><use href="#i-logo"/></svg></span>
+    <h1>Bem-vindo de volta</h1>
+    <p>Entre para gerenciar o catálogo e seus STRMs.</p>
+    <form id="loginForm" novalidate>
+      <label class="field">Usuário
+        <input id="username" name="username" autocomplete="username" required minlength="3" maxlength="40" autofocus>
+      </label>
+      <label class="field">Senha
+        <span class="pw"><input id="password" name="password" type="password" autocomplete="current-password" required><button type="button" id="togglePw" aria-label="Mostrar senha">Mostrar</button></span>
+      </label>
+      <button class="btn primary" id="loginButton" type="submit">Entrar <svg><use href="#i-arrow"/></svg></button>
+      <p class="login-status" id="loginStatus" role="alert" aria-live="polite"></p>
+    </form>
+    <div class="login-foot"><svg><use href="#i-lock"/></svg>Acesso restrito a administradores do servidor</div>
+  </div>
+</main>
+<script src="/login.js" defer></script>
+</body>
+</html>

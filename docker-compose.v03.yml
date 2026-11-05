@@ -1,0 +1,14 @@
+# Somente complemento. Use junto do docker-compose.yml que já funciona.
+services:
+  strm-indexer:
+    environment:
+      INDEXER_STATE_DIR: /app/data
+      INDEXER_EXPORT_DIR: /app/export
+      INDEXER_PLAY_BASE: http://127.0.0.1:8794
+      INDEXER_FAILURE_LIMIT: '3'
+      INDEXER_CHECK_INTERVAL: '86400'
+      INDEXER_NOTIFY_WEBHOOK: ${INDEXER_NOTIFY_WEBHOOK:-}
+      INDEXER_NOTIFY_TOKEN: ${INDEXER_NOTIFY_TOKEN:-}
+      INDEXER_ALLOWED_MEDIA_HOSTS: ${INDEXER_ALLOWED_MEDIA_HOSTS:-}
+    volumes:
+      - ./export:/app/export:rw

@@ -1,0 +1,24 @@
+services:
+  strm-indexer:
+    image: python:3.12-slim
+    container_name: strm-indexer
+    restart: unless-stopped
+    working_dir: /app
+    command: ["python", "-u", "api.py"]
+
+    environment:
+      INDEXER_PLAYLIST_DIR: /app/playlists
+      INDEXER_DB: /app/data/catalog.sqlite
+      INDEXER_PORT: "8794"
+      INDEXER_TOKEN: ${INDEXER_TOKEN:-}
+
+    volumes:
+      - ./:/app:ro
+      - ./data:/app/data:rw
+
+    ports:
+      - "100.65.215.64:8794:8794"
+      - "127.0.0.1:8794:8794"
+
+    mem_limit: 512m
+    pids_limit: 64

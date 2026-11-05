@@ -1,0 +1,5 @@
+services:
+  strm-indexer:
+    environment:
+      INDEXER_TVDB_API_KEY: ${INDEXER_TVDB_API_KEY:-}
+      INDEXER_TVDB_PIN: ${INDEXER_TVDB_PIN:-}

@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#06080d">
+<meta name="color-scheme" content="dark">
+<title>STRM Indexer</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<svg class="sprite" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+  <symbol id="i-logo" viewBox="0 0 32 32"><rect x="3" y="6" width="26" height="20" rx="5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M13 11.5v9l7.5-4.5z" fill="currentColor"/></symbol>
+  <symbol id="i-film" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M7 3v18M17 3v18M3 8h4M3 16h4M17 8h4M17 16h4M3 12h18" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+  <symbol id="i-tv" viewBox="0 0 24 24"><rect x="2.5" y="5" width="19" height="13" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 21h8M9 2l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7.5 3v5.5c0 4.6-3.2 8.3-7.5 9.5-4.3-1.2-7.5-4.9-7.5-9.5V6z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M8.8 12.2l2.2 2.2 4.3-4.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M4 6h11M4 12h11M4 18h7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="18.5" cy="16.5" r="3.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M18.5 3v13.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 16l4.5 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+  <symbol id="i-left" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-right" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l10.5-6.5z" fill="currentColor"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 10-2.3 5.7M20 4v7h-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 16v3a1.5 1.5 0 001.5 1.5h13A1.5 1.5 0 0020 19v-3" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-github" viewBox="0 0 24 24"><path d="M12 2.5a9.5 9.5 0 00-3 18.5c.5.1.7-.2.7-.5v-1.7c-2.7.6-3.3-1.2-3.3-1.2-.4-1.1-1.1-1.4-1.1-1.4-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.5 2.3 1.1 2.9.8.1-.6.3-1.1.6-1.3-2.1-.2-4.4-1.1-4.4-4.7 0-1 .4-1.9 1-2.6-.1-.2-.4-1.2.1-2.6 0 0 .8-.3 2.6 1a9 9 0 014.8 0c1.8-1.3 2.6-1 2.6-1 .5 1.4.2 2.4.1 2.6.6.7 1 1.6 1 2.6 0 3.7-2.3 4.5-4.4 4.7.3.3.7.9.7 1.8v2.6c0 .3.2.6.7.5A9.5 9.5 0 0012 2.5z" fill="currentColor"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M14 3v5h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 0112 0v5l1.5 2h-15zM10 20.5a2 2 0 004 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+  <symbol id="i-logout" viewBox="0 0 24 24"><path d="M15 4h3a2 2 0 012 2v12a2 2 0 01-2 2h-3M10 17l-5-5 5-5M5 12h11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z" fill="currentColor"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5zM3 13l9 5 9-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4l9 16H3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M12 10v4.5M12 17.2v.3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="9" cy="10" r="2" fill="currentColor"/><path d="M4 18l5-5 4 4 3-3 4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2.5h8a2 2 0 012 2V17a2 2 0 01-2 2H5a2 2 0 01-2-2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+</svg>
+
+<div class="app">
+  <aside class="sidebar">
+    <a class="brand" href="#/filmes" aria-label="STRM Indexer">
+      <span class="brand-mark"><svg><use href="#i-logo"/></svg></span>
+      <span class="brand-text"><strong>STRM Indexer</strong><small>Media catalog</small></span>
+    </a>
+    <nav class="nav" aria-label="Navegação principal">
+      <span class="nav-label">Biblioteca</span>
+      <a class="nav-item" href="#/filmes" data-view="movie"><svg><use href="#i-film"/></svg><span>Filmes</span><em id="navMovies"></em></a>
+      <a class="nav-item" href="#/series" data-view="episode"><svg><use href="#i-tv"/></svg><span>Séries</span><em id="navSeries"></em></a>
+      <span class="nav-label">Gerenciamento</span>
+      <a class="nav-item" href="#/gerenciados" data-view="managed"><svg><use href="#i-shield"/></svg><span>Gerenciados</span><b id="alertBadge" class="badge hidden"></b></a>
+      <a class="nav-item" href="#/solicitacoes" data-view="requests"><svg><use href="#i-bell"/></svg><span>Solicitações</span><b id="reqBadge" class="badge info hidden"></b></a>
+      <a class="nav-item" href="#/listas" data-view="sources"><svg><use href="#i-list"/></svg><span>Listas e fontes</span></a>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="meta-card" id="metaCard">
+        <div class="meta-row"><span class="pulse"></span><span>Catálogo</span><small id="lastUpdate">—</small></div>
+        <div class="meta-row muted"><svg><use href="#i-spark"/></svg><span id="metaQueue">Metadados —</span></div>
+      </div>
+      <div class="user">
+        <span class="avatar" id="avatar">·</span>
+        <span class="user-name"><strong id="userName">—</strong><small>Administrador</small></span>
+        <button class="icon-btn" id="logout" type="button" title="Sair" aria-label="Sair"><svg><use href="#i-logout"/></svg></button>
+      </div>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <label class="omnibox">
+        <svg><use href="#i-search"/></svg>
+        <input id="search" type="search" placeholder="Buscar filmes e séries…" autocomplete="off" maxlength="120" aria-label="Buscar">
+        <kbd>/</kbd>
+      </label>
+      <div class="topbar-actions">
+        <a class="icon-btn" href="#/gerenciados" title="Notificações" aria-label="Notificações"><svg><use href="#i-bell"/></svg><i id="bellDot" class="dot hidden"></i></a>
+      </div>
+    </header>
+
+    <!-- Catálogo (filmes / séries) -->
+    <section class="view" id="viewCatalog">
+      <div class="hero" id="hero">
+        <div class="hero-bg" id="heroBg"></div>
+        <div class="hero-content">
+          <span class="eyebrow" id="heroEyebrow">Biblioteca</span>
+          <h1 id="heroTitle">Filmes</h1>
+          <p id="heroText">Explore o catálogo indexado e envie títulos validados para o Jellyfin.</p>
+          <div class="stats">
+            <div class="stat"><strong id="statMovies">—</strong><span>filmes</span></div>
+            <div class="stat"><strong id="statEpisodes">—</strong><span>episódios</span></div>
+            <div class="stat"><strong id="statSources">—</strong><span>listas</span></div>
+            <div class="stat"><strong id="statCategories">—</strong><span>categorias</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="toolbar">
+        <div class="chips-wrap" id="chipsWrap">
+          <button class="chip-arrow left hidden" id="chipsPrev" type="button" aria-label="Categorias anteriores"><svg><use href="#i-left"/></svg></button>
+          <div class="chips" id="categoryChips" role="tablist" aria-label="Categorias"></div>
+          <button class="chip-arrow right hidden" id="chipsNext" type="button" aria-label="Mais categorias"><svg><use href="#i-right"/></svg></button>
+        </div>
+        <button class="btn" id="allCats" type="button"><svg><use href="#i-layers"/></svg><span id="allCatsLabel">Categorias</span></button>
+        <div class="toolbar-right">
+          <div class="select"><select id="source" aria-label="Lista"><option value="">Todas as listas</option></select><svg><use href="#i-chev"/></svg></div>
+          <button class="btn ghost hidden" id="clear" type="button"><svg><use href="#i-x"/></svg>Limpar</button>
+        </div>
+      </div>
+
+      <div class="results-head">
+        <h2 id="resultsTitle">Todos os filmes</h2>
+        <span class="count" id="totalLabel"></span>
+      </div>
+      <div class="grid" id="results" aria-live="polite"></div>
+      <nav class="pager" id="pager" aria-label="Paginação"></nav>
+      <p class="credit hidden" id="tvmazeCredit">Metadados de séries: <a href="https://www.tvmaze.com/" target="_blank" rel="noopener noreferrer">TVmaze</a> (CC BY-SA)</p>
+    </section>
+
+    <!-- Gerenciados -->
+    <section class="view hidden" id="viewManaged">
+      <div class="page-head">
+        <div><span class="eyebrow">Jellyfin</span><h1>STRMs gerenciados</h1><p>Arquivos criados pelo indexador, validados diariamente. Fontes com falhas seguidas vão para quarentena.</p></div>
+        <button class="btn" id="refreshManaged" type="button"><svg><use href="#i-refresh"/></svg>Atualizar</button>
+      </div>
+      <div class="kpi-row" id="managedKpis"></div>
+      <div class="split">
+        <div class="panel">
+          <div class="panel-head">
+            <div class="segmented" id="managedFilter" role="tablist">
+              <button type="button" data-f="all" class="on">Todos</button>
+              <button type="button" data-f="movie">Filmes</button>
+              <button type="button" data-f="episode">Séries</button>
+              <button type="button" data-f="quarantined">Quarentena</button>
+            </div>
+            <label class="mini-search"><svg><use href="#i-search"/></svg><input id="managedSearch" placeholder="Filtrar…" autocomplete="off"></label>
+          </div>
+          <div id="managedList" class="managed-list"></div>
+        </div>
+        <aside class="panel">
+          <div class="panel-head"><h3><svg><use href="#i-bell"/></svg>Notificações</h3></div>
+          <div id="alertList" class="timeline"></div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- Solicitações vindas do Jellyfin -->
+    <section class="view hidden" id="viewRequests">
+      <div class="page-head">
+        <div><span class="eyebrow">Jellyfin</span><h1>Solicitações</h1><p>Pedidos feitos pela busca do Jellyfin. A aprovação é automática quando a fonte passa na validação.</p></div>
+        <button class="btn" id="refreshRequests" type="button"><svg><use href="#i-refresh"/></svg>Atualizar</button>
+      </div>
+      <div class="kpi-row" id="requestKpis"></div>
+      <div class="panel"><div id="requestList" class="managed-list"></div></div>
+    </section>
+
+    <!-- Listas -->
+    <section class="view hidden" id="viewSources">
+      <div class="page-head">
+        <div><span class="eyebrow">Fontes</span><h1>Listas de reprodução</h1><p>Cada arquivo M3U/M3U8 é uma fonte independente. A indexação recomeça automaticamente ao adicionar ou atualizar.</p></div>
+        <button class="btn" id="reindexPlaylists" type="button"><svg><use href="#i-refresh"/></svg>Reindexar tudo</button>
+      </div>
+      <div class="job hidden" id="playlistJob"><span class="spinner"></span><span id="playlistJobText"></span></div>
+      <div class="add-grid">
+        <label class="dropzone" id="dropzone">
+          <input type="file" id="playlistFile" accept=".m3u,.m3u8">
+          <span class="dz-icon"><svg><use href="#i-upload"/></svg></span>
+          <strong>Arraste um arquivo .m3u / .m3u8</strong>
+          <small id="dzHint">ou clique para escolher · até 100 MiB</small>
+        </label>
+        <form class="panel github-card" id="githubForm">
+          <div class="gh-head"><svg><use href="#i-github"/></svg><div><strong>Importar do GitHub</strong><small>Link raw ou github.com/…/blob/…</small></div></div>
+          <input id="githubPlaylist" type="url" placeholder="https://github.com/usuario/repo/blob/main/lista.m3u8" required>
+          <button class="btn primary" id="addGithub" type="submit"><svg><use href="#i-plus"/></svg>Adicionar lista</button>
+        </form>
+      </div>
+      <div class="results-head"><h2>Arquivos</h2><span class="count" id="filesCount"></span></div>
+      <div id="sourceList" class="file-grid"></div>
+    </section>
+
+    <footer class="foot">STRM Indexer · links de mídia e credenciais nunca são exibidos neste painel.</footer>
+  </div>
+
+  <nav class="tabbar" aria-label="Navegação">
+    <a href="#/filmes" data-view="movie"><svg><use href="#i-film"/></svg>Filmes</a>
+    <a href="#/series" data-view="episode"><svg><use href="#i-tv"/></svg>Séries</a>
+    <a href="#/gerenciados" data-view="managed"><svg><use href="#i-shield"/></svg>Gerenciados</a>
+    <a href="#/solicitacoes" data-view="requests"><svg><use href="#i-bell"/></svg>Pedidos</a>
+    <a href="#/listas" data-view="sources"><svg><use href="#i-list"/></svg>Listas</a>
+  </nav>
+</div>
+
+<!-- Painel de detalhes -->
+<div class="drawer-wrap hidden" id="drawer" role="dialog" aria-modal="true" aria-labelledby="dTitle">
+  <div class="scrim" id="scrim"></div>
+  <article class="drawer">
+    <button class="icon-btn close" id="closeDrawer" type="button" aria-label="Fechar"><svg><use href="#i-x"/></svg></button>
+    <header class="d-hero">
+      <div class="d-backdrop" id="dBackdrop"></div>
+      <div class="d-hero-inner">
+        <div class="d-poster" id="dPoster"></div>
+        <div class="d-info">
+          <span class="eyebrow" id="dEyebrow"></span>
+          <h2 id="dTitle"></h2>
+          <div class="d-meta" id="dMeta"></div>
+          <p class="d-overview" id="dOverview"></p>
+        </div>
+      </div>
+    </header>
+    <div class="d-body" id="dBody"></div>
+  </article>
+</div>
+
+<div class="dialog-wrap hidden" id="dialog" role="alertdialog" aria-modal="true" aria-labelledby="dlgTitle">
+  <div class="dialog">
+    <h3 id="dlgTitle"></h3>
+    <p id="dlgText"></p>
+    <div class="dialog-actions"><button class="btn ghost" id="dlgCancel" type="button">Cancelar</button><button class="btn primary" id="dlgOk" type="button">Confirmar</button></div>
+  </div>
+</div>
+
+<div class="catpop-wrap hidden" id="catpop" role="dialog" aria-modal="true" aria-labelledby="catpopTitle">
+  <div class="catpop">
+    <div class="catpop-head">
+      <h3 id="catpopTitle">Categorias</h3>
+      <button class="icon-btn" id="catpopClose" type="button" aria-label="Fechar"><svg><use href="#i-x"/></svg></button>
+    </div>
+    <label class="mini-search"><svg><use href="#i-search"/></svg><input id="catpopSearch" placeholder="Filtrar categorias…" autocomplete="off"></label>
+    <div class="catpop-sort segmented" id="catpopSort"><button type="button" data-s="count" class="on">Mais títulos</button><button type="button" data-s="name">A–Z</button></div>
+    <div class="catpop-list" id="catpopList"></div>
+  </div>
+</div>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<script src="/app.js" defer></script>
+</body>
+</html>

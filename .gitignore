@@ -1,0 +1,21 @@
+# Segredos e configuração local
+.env
+*.env
+!.env.example
+# Dados gerados
+data/
+export/
+playlists/*
+!playlists/.gitkeep
+*.sqlite
+*.db
+# Backups, pacotes e temporários
+backup-*/
+web.bak-*/
+backend/
+*.bak
+*.zip
+*.log
+__pycache__/
+*.pyc
+/p

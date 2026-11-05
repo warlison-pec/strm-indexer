@@ -1,0 +1,10 @@
+# Complemento para uso com docker-compose.yml + docker-compose.v03.yml
+# + docker-compose.storage.yml (se já configurado).
+services:
+  strm-indexer:
+    environment:
+      INDEXER_TMDB_TOKEN: ${INDEXER_TMDB_TOKEN:-}
+      INDEXER_TMDB_API_KEY: ${INDEXER_TMDB_API_KEY:-}
+      INDEXER_PLAYLIST_DIR: /app/playlists
+    volumes:
+      - ./playlists:/app/playlists:rw

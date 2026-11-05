@@ -1,0 +1,7 @@
+services:
+  strm-indexer:
+    environment:
+      INDEXER_JELLYFIN_URL: ${INDEXER_JELLYFIN_URL:-}
+      INDEXER_JELLYFIN_API_KEY: ${INDEXER_JELLYFIN_API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
