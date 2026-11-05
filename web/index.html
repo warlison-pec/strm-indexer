@@ -191,13 +191,22 @@
       </div>
       <div class="panel ch-out">
         <div class="panel-head"><h3><svg><use href="#i-file"/></svg>Lista gerada</h3></div>
-        <div class="ch-url"><input id="chUrl" readonly><button class="btn" id="chCopy" type="button"><svg><use href="#i-copy"/></svg>Copiar</button><a class="btn ghost" id="chDownload" download="canais.m3u">Baixar .m3u</a></div>
-        <p class="muted ch-hint">Use este endereço como sintonizador M3U na TV ao vivo do Jellyfin (Painel → TV ao vivo → Adicionar sintonizador → M3U) ou em "Minha lista" do StreamBox. Quem tiver o link consegue ver a lista: gere uma nova chave se ele vazar.</p>
+        <label class="ch-label">Lista de canais (M3U)</label>
+        <div class="ch-url"><input id="chUrl" readonly><button class="btn" data-copy="chUrl" type="button"><svg><use href="#i-copy"/></svg>Copiar</button><a class="btn ghost" id="chDownload" download="canais.m3u">Baixar</a></div>
+        <label class="ch-label">Guia de programação (XMLTV) <small class="muted" id="chEpgInfo"></small></label>
+        <div class="ch-url"><input id="chGuideUrl" readonly><button class="btn" data-copy="chGuideUrl" type="button"><svg><use href="#i-copy"/></svg>Copiar</button><a class="btn ghost" id="chGuideDownload" download="guia.xml">Baixar</a></div>
+        <p class="muted ch-hint">No Jellyfin: Painel → TV ao vivo → adicione a lista como <b>sintonizador M3U</b> e o guia como <b>provedor XMLTV</b>. No StreamBox, use os dois em "Minha lista". A lista já aponta para o guia no cabeçalho, então a maioria dos players acha o guia sozinha. Quem tiver os links consegue ver a lista: gere uma nova chave se eles vazarem.</p>
         <div class="ch-settings">
-          <label class="field-inline">Guia de programação (EPG / XMLTV)<input id="chEpg" placeholder="https://… (opcional)" autocomplete="off"></label>
           <label class="cf-toggle"><input type="checkbox" id="chOnlyOk"><span><b>Incluir só canais testados e funcionando</b><small>Canais novos ou com falha ficam de fora até passarem no teste.</small></span></label>
           <div class="ch-actions"><button class="btn primary" id="chSaveSettings" type="button"><svg><use href="#i-check"/></svg>Salvar</button><button class="btn ghost" id="chNewToken" type="button"><svg><use href="#i-refresh"/></svg>Gerar nova chave</button></div>
         </div>
+      </div>
+      <div class="panel ch-out">
+        <div class="panel-head"><h3><svg><use href="#i-list"/></svg>Fontes de guia (EPG)</h3>
+          <div class="ch-actions"><button class="btn sm ghost" id="epgAuto" type="button"><svg><use href="#i-spark"/></svg>Associar automaticamente</button><button class="btn sm" id="epgRefresh" type="button"><svg><use href="#i-refresh"/></svg>Atualizar guias</button></div></div>
+        <p class="muted ch-hint ch-hint-top">Cadastre guias XMLTV (.xml ou .xml.gz). O sistema baixa e atualiza a cada 12 h, associa cada canal da sua lista ao guia (pelo tvg-id e depois pelo nome) e publica um guia só com os seus canais. Clique em "Guia" num canal para escolher à mão.</p>
+        <div class="ch-url"><input id="epgNewUrl" placeholder="https://exemplo.com/guia.xml.gz" autocomplete="off"><input id="epgNewName" class="epg-name" placeholder="Nome (opcional)" autocomplete="off"><button class="btn" id="epgAdd" type="button"><svg><use href="#i-plus"/></svg>Adicionar</button></div>
+        <div id="epgSources" class="epg-sources"></div>
       </div>
     </section>
 
@@ -264,6 +273,15 @@
     <h3 id="dlgTitle"></h3>
     <p id="dlgText"></p>
     <div class="dialog-actions"><button class="btn ghost" id="dlgCancel" type="button">Cancelar</button><button class="btn primary" id="dlgOk" type="button">Confirmar</button></div>
+  </div>
+</div>
+
+<div class="catpop-wrap hidden" id="epgpop" role="dialog" aria-modal="true" aria-labelledby="epgpopTitle">
+  <div class="catpop">
+    <div class="catpop-head"><h3 id="epgpopTitle">Guia do canal</h3><button class="icon-btn" id="epgpopClose" type="button" aria-label="Fechar"><svg><use href="#i-x"/></svg></button></div>
+    <div class="ch-actions"><button class="btn sm" id="epgpopAuto" type="button"><svg><use href="#i-spark"/></svg>Automático</button><button class="btn sm ghost" id="epgpopNone" type="button">Sem guia</button></div>
+    <label class="mini-search"><svg><use href="#i-search"/></svg><input id="epgpopSearch" placeholder="Buscar canal no guia…" autocomplete="off"></label>
+    <div class="catpop-list epg-results" id="epgpopList"></div>
   </div>
 </div>
 

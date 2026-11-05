@@ -67,3 +67,14 @@ A aba **Canais** funciona como o "Channels" do Dispatcharr:
   Também dá para informar o guia (EPG/XMLTV) e escolher incluir só canais testados e funcionando, que é o padrão. Se o link vazar, gere uma nova chave.
 
 A seleção fica em `data/channels.sqlite`, com cópia dos dados de cada canal, e os logos ficam guardados em `data/channel_logos/`.
+
+### Guia de programação (EPG)
+
+Em **Fontes de guia (EPG)** você cadastra guias XMLTV (`.xml` ou `.xml.gz`).
+
+- **Atualização:** o indexador baixa as fontes e atualiza a cada 12 h.
+- **Associação:** cada canal da sua lista é ligado ao guia automaticamente, primeiro pelo `tvg-id` e depois pelo nome (ignorando HD/FHD/4K). Clicando em "Guia" no canal, dá para escolher à mão ou marcar "sem guia".
+- **Guia publicado:** um único guia com **só os seus canais**, de 6 h atrás até 3 dias à frente (`/strm-api/channels.xml?t=…`). A lista M3U já aponta para ele no cabeçalho (`x-tvg-url`) e usa os mesmos `tvg-id`.
+- **Arquivos grandes:** são lidos em fluxo; um guia de 70 MB é processado em segundos com pouca memória.
+
+No Jellyfin: **Painel → TV ao vivo**, adicione a lista como sintonizador M3U e o guia como provedor XMLTV.

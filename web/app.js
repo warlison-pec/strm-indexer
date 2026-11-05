@@ -487,7 +487,7 @@ function renderAvail() {
 async function chLoadSelected() {
   try {
     const r = await api('/channels/selected');
-    ch.sel = r.items; ch.token = r.token; ch.settings = r.settings;
+    ch.sel = r.items; ch.token = r.token; ch.settings = r.settings; ch.epg = r.epg;
     renderSelected(); renderAvail(); renderOutput(); chTestProgress(r.test);
   } catch (e) { toast(e.message, 'bad'); }
 }
@@ -507,13 +507,17 @@ function renderSelected() {
     const name = h('span', { class: 'ch-name', title: 'Clique para editar nome e grupo' }, h('b', { text: x.name }), h('small', { text: x.group_title || 'Sem grupo' }));
     name.addEventListener('click', () => chEdit(x, name));
     const st = h('span', { class: 'ch-st ' + cls, text: label, title: x.detail || (x.status === 'untested' ? 'Ainda não testado' : '') });
+    const g = h('button', { class: 'ch-epg' + (x.epg ? ' on' : x.epg_mode === 'none' ? ' off' : ''), type: 'button',
+      title: x.epg ? `Guia: ${x.epg.name} · ${x.epg.source}` + (x.epg_mode === 'manual' ? ' (escolhido à mão)' : ' (automático)') : x.epg_mode === 'none' ? 'Sem guia (desativado)' : 'Nenhum guia encontrado: clique para escolher' },
+      x.epg ? '📺 ' + x.epg.name : x.epg_mode === 'none' ? 'Sem guia' : 'Guia?');
+    g.addEventListener('click', () => openEpgPicker(x));
     const test = h('button', { class: 'ch-ico', type: 'button', title: 'Testar este canal' }, icon('refresh'));
     test.addEventListener('click', async () => { st.className = 'ch-st testing'; st.textContent = '…'; await post('/channels/test', { ids: [x.id] }).catch(e => toast(e.message, 'bad')); chWatchTest(); });
     const del = h('button', { class: 'ch-ico', type: 'button', title: 'Remover da lista' }, icon('trash'));
     del.addEventListener('click', async () => { await post('/channels/remove', { ids: [x.id] }).catch(e => toast(e.message, 'bad')); ch.sel = ch.sel.filter(y => y.id !== x.id); renderSelected(); renderAvail(); });
     const row = h('div', { class: 'ch-row', data: { id: x.id } },
       canDrag ? h('span', { class: 'ch-grip', title: 'Arraste para reordenar' }, icon('grip')) : null,
-      num, chLogo(x.id, !!x.logo, x.name), name, st, test, del);
+      num, chLogo(x.id, !!x.logo, x.name), name, g, st, test, del);
     if (canDrag) {
       row.draggable = true;
       row.addEventListener('dragstart', e => { ch.dragId = x.id; row.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; });
@@ -563,11 +567,75 @@ function chWatchTest() {
 }
 function renderOutput() {
   // /strm-api/ é o caminho que o túnel publica; também funciona direto no servidor
-  const url = `${location.origin}/strm-api/channels.m3u?t=${encodeURIComponent(ch.token)}`;
+  const t = encodeURIComponent(ch.token);
+  const url = `${location.origin}/strm-api/channels.m3u?t=${t}`, guide = `${location.origin}/strm-api/channels.xml?t=${t}`;
   $('chUrl').value = url; $('chDownload').href = url;
-  if (document.activeElement !== $('chEpg')) $('chEpg').value = ch.settings.epg_url || '';
+  $('chGuideUrl').value = guide; $('chGuideDownload').href = guide;
   $('chOnlyOk').checked = !!ch.settings.only_ok;
+  const e = ch.epg || { mapped: 0, total: 0, sources: [] };
+  $('chEpgInfo').textContent = e.sources.length ? `· ${fmt(e.mapped)} de ${fmt(e.total)} canais com guia` : '· cadastre uma fonte de guia abaixo';
+  renderEpgSources();
 }
+function renderEpgSources() {
+  const box = $('epgSources'); box.replaceChildren();
+  const e = ch.epg || { sources: [] };
+  for (const s of e.sources) {
+    const when = s.fetched_at ? new Date(s.fetched_at * 1000).toLocaleString('pt-BR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
+    const st = s.status === 'ok' ? ['ok', 'OK'] : s.status === 'fail' ? ['fail', 'Falha'] : ['testing', e.running ? 'Baixando…' : 'Pendente'];
+    const del = h('button', { class: 'ch-ico', type: 'button', title: 'Remover fonte' }, icon('trash'));
+    del.addEventListener('click', async () => {
+      if (!window.confirm('Remover esta fonte de guia?')) return;
+      try { await post('/channels/epg/remove', { id: s.id }); chLoadSelected(); } catch (err) { toast(err.message, 'bad'); }
+    });
+    box.append(h('div', { class: 'epg-src' },
+      h('span', { class: 'ch-name' }, h('b', { text: s.name || s.url.replace(/^https?:\/\//, '').slice(0, 70) }),
+        h('small', { text: s.status === 'fail' ? s.message : [s.channels ? fmt(s.channels) + ' canais no guia' : '', when ? 'atualizado ' + when : '', s.size ? (s.size / 1048576).toFixed(1) + ' MB' : ''].filter(Boolean).join(' · ') })),
+      h('span', { class: 'ch-st ' + st[0], text: st[1], title: s.message || '' }), del));
+  }
+  if (!e.sources.length) box.append(h('div', { class: 'ch-empty', text: 'Nenhuma fonte de guia cadastrada.' }));
+  clearTimeout(ch.epgTimer);
+  if (e.running || e.sources.some(s => s.status === 'pending')) ch.epgTimer = setTimeout(chLoadSelected, 3000);
+}
+/* Escolher o canal do guia para um canal da lista */
+let epgFor = null, epgTyping;
+function openEpgPicker(x) {
+  epgFor = x;
+  $('epgpopTitle').textContent = 'Guia de ' + x.name;
+  $('epgpopSearch').value = x.name.replace(/\b(HD|FHD|SD|4K|UHD)\b/gi, '').trim();
+  $('epgpop').classList.remove('hidden');
+  epgSearch(); setTimeout(() => $('epgpopSearch').focus(), 50);
+}
+async function epgSearch() {
+  const list = $('epgpopList');
+  try {
+    const r = await api('/channels/epg/search', { params: { q: $('epgpopSearch').value.trim() } });
+    list.replaceChildren();
+    for (const it of r.items) {
+      const on = epgFor && epgFor.epg_channel === it.id && epgFor.epg_source === it.source_id;
+      const b = h('button', { class: 'cat-item' + (on ? ' on' : ''), type: 'button', title: it.id }, h('span', { text: it.name }), h('small', { text: it.source + ' · ' + it.id }));
+      b.addEventListener('click', () => epgAssign({ mode: 'manual', source_id: it.source_id, channel: it.id }));
+      list.append(b);
+    }
+    if (!r.items.length) list.append(h('div', { class: 'catpop-empty', text: (ch.epg && ch.epg.sources.length) ? 'Nenhum canal do guia com esse nome.' : 'Cadastre uma fonte de guia primeiro.' }));
+  } catch (err) { list.replaceChildren(h('div', { class: 'catpop-empty', text: err.message })); }
+}
+async function epgAssign(body) {
+  try { await post('/channels/epg/assign', { id: epgFor.id, ...body }); $('epgpop').classList.add('hidden'); chLoadSelected(); }
+  catch (err) { toast(err.message, 'bad'); }
+}
+$('epgpopSearch').addEventListener('input', () => { clearTimeout(epgTyping); epgTyping = setTimeout(epgSearch, 250); });
+$('epgpopClose').addEventListener('click', () => $('epgpop').classList.add('hidden'));
+$('epgpop').addEventListener('click', e => { if (e.target === $('epgpop')) $('epgpop').classList.add('hidden'); });
+$('epgpopAuto').addEventListener('click', () => epgAssign({ mode: 'auto' }));
+$('epgpopNone').addEventListener('click', () => epgAssign({ mode: 'none' }));
+$('epgAdd').addEventListener('click', async () => {
+  const btn = $('epgAdd'); btn.disabled = true;
+  try { await post('/channels/epg/add', { url: $('epgNewUrl').value, name: $('epgNewName').value }); $('epgNewUrl').value = ''; $('epgNewName').value = ''; toast('Fonte adicionada: baixando o guia…', 'ok'); chLoadSelected(); }
+  catch (err) { toast(err.message, 'bad'); }
+  finally { btn.disabled = false; }
+});
+$('epgRefresh').addEventListener('click', async () => { try { await post('/channels/epg/refresh', {}); toast('Atualizando os guias…', 'ok'); chLoadSelected(); } catch (err) { toast(err.message, 'bad'); } });
+$('epgAuto').addEventListener('click', async () => { try { const r = await post('/channels/epg/automatch', {}); toast(`${fmt(r.mapped)} de ${fmt(r.total)} canais com guia`, 'ok'); chLoadSelected(); } catch (err) { toast(err.message, 'bad'); } });
 let chTyping;
 $('chQ').addEventListener('input', () => { clearTimeout(chTyping); chTyping = setTimeout(() => chBrowse(true), 250); });
 $('chSource').addEventListener('change', async () => { await chFacets(); chBrowse(true); });
@@ -590,12 +658,13 @@ $('chRenumber').addEventListener('click', async () => { await post('/channels/re
 $('chDropFailed').addEventListener('click', async () => {
   try { const r = await post('/channels/remove', { failed: true }); toast(`${fmt(r.removed)} canal(is) removido(s)`, 'ok'); chLoadSelected(); } catch (e) { toast(e.message, 'bad'); }
 });
-$('chCopy').addEventListener('click', async () => {
-  try { await navigator.clipboard.writeText($('chUrl').value); toast('Endereço copiado', 'ok'); }
-  catch { $('chUrl').select(); document.execCommand('copy'); toast('Endereço copiado', 'ok'); }
-});
+document.querySelectorAll('[data-copy]').forEach(btn => btn.addEventListener('click', async () => {
+  const input = $(btn.dataset.copy);
+  try { await navigator.clipboard.writeText(input.value); } catch { input.select(); document.execCommand('copy'); }
+  toast('Endereço copiado', 'ok');
+}));
 $('chSaveSettings').addEventListener('click', async () => {
-  try { const r = await post('/channels/settings', { epg_url: $('chEpg').value, only_ok: $('chOnlyOk').checked }); ch.settings = r.settings; toast('Configuração salva', 'ok'); }
+  try { const r = await post('/channels/settings', { only_ok: $('chOnlyOk').checked }); ch.settings = r.settings; toast('Configuração salva', 'ok'); }
   catch (e) { toast(e.message, 'bad'); }
 });
 $('chNewToken').addEventListener('click', async () => {

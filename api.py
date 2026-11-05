@@ -2,6 +2,7 @@
 """Read-only local catalog HTTP API. No media proxy and no STRM writes."""
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import re
 import threading
 import hmac
 import auth
@@ -15,6 +16,7 @@ import tvdb_meta as tvdb
 import jellyfin_bridge as bridge
 import content_filter
 import channels
+import epg
 from catalog_identity import key_for
 import os
 from pathlib import Path
@@ -284,6 +286,18 @@ class Handler(BaseHTTPRequestHandler):
                     r = channels.save_settings(d.get('epg_url'), d.get('only_ok'), bool(d.get('new_token')))
                 elif parsed.path == '/channels/test':
                     r = channels.start_test(d.get('ids'), bool(d.get('only_untested')))
+                elif parsed.path == '/channels/epg/add':
+                    r = epg.add_source(d.get('url'), d.get('name', ''))
+                elif parsed.path == '/channels/epg/remove':
+                    r = epg.remove_source(d.get('id'))
+                elif parsed.path == '/channels/epg/refresh':
+                    epg.refresh_async(force=True)
+                    r = epg.summary()
+                elif parsed.path == '/channels/epg/assign':
+                    r = epg.assign(d.get('id'), d.get('mode'), d.get('source_id'), d.get('channel'))
+                elif parsed.path == '/channels/epg/automatch':
+                    epg.auto_match()
+                    r = epg.summary()
                 else:
                     return self.send_json(404, {'error': 'Rota não encontrada'})
                 return self.send_json(200, r)
@@ -435,6 +449,35 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def public_base(self):
+        """Endereço público do indexador como o cliente o vê (atrás do Cloudflare ou direto)."""
+        host = (self.headers.get('X-Forwarded-Host') or self.headers.get('Host') or '').split(',')[0].strip()
+        if not host or not re.fullmatch(r'[A-Za-z0-9.\-]+(:\d+)?', host):
+            return ''
+        proto = (self.headers.get('X-Forwarded-Proto') or 'http').split(',')[0].strip()
+        return f"{'https' if proto == 'https' else 'http'}://{host}"
+
+    def send_guide(self):
+        try:
+            path = epg.guide_file()
+        except Exception as exc:
+            print('EPG:', type(exc).__name__, exc, flush=True)
+            return self.send_json(503, {'error': 'Guia indisponível'})
+        gz = 'gzip' in (self.headers.get('Accept-Encoding') or '')
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/xml; charset=utf-8')
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        if gz:
+            import gzip as _gz
+            data = _gz.compress(path.read_bytes(), 6)
+            self.send_header('Content-Encoding', 'gzip')
+        else:
+            data = path.read_bytes()
+        self.send_header('Content-Length', str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     def send_m3u(self, text):
         data = text.encode('utf-8')
         self.send_response(200)
@@ -450,8 +493,12 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlsplit(self.path)
         # Lista de canais gerada: pública, protegida pela chave na URL (?t=...)
         if parsed.path in ('/channels/list.m3u', '/strm-api/channels.m3u', '/jf/channels.m3u'):
-            text = channels.playlist(parse_qs(parsed.query).get('t', [''])[0])
+            text = channels.playlist(parse_qs(parsed.query).get('t', [''])[0], self.public_base())
             return self.send_m3u(text) if text is not None else self.send_json(403, {'error': 'Chave inválida'})
+        if parsed.path in ('/channels/guide.xml', '/strm-api/channels.xml', '/jf/channels.xml'):
+            if not channels.valid_token(parse_qs(parsed.query).get('t', [''])[0]):
+                return self.send_json(403, {'error': 'Chave inválida'})
+            return self.send_guide()
         if parsed.path.startswith(('/jf/', '/strm-api/')):
             return bridge.handle(self, 'GET', parsed)
         if parsed.path.startswith('/channels/'):
@@ -468,6 +515,10 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json(200, channels.selected())
                 if parsed.path == '/channels/test':
                     return self.send_json(200, channels.test_status())
+                if parsed.path == '/channels/epg':
+                    return self.send_json(200, epg.summary())
+                if parsed.path == '/channels/epg/search':
+                    return self.send_json(200, {'items': epg.search(arg('q')[:100])})
                 if parsed.path.startswith('/channels/logo/'):
                     found = channels.logo(parsed.path.rsplit('/', 1)[-1])
                     if not found:
@@ -619,5 +670,7 @@ if __name__ == '__main__':
     threading.Thread(target=media.run_monitor, args=(threading.Event(),), daemon=True).start()
     bridge.setup()
     threading.Thread(target=bridge.loop, args=(threading.Event(),), daemon=True).start()
+    epg.setup()
+    threading.Thread(target=epg.loop, args=(threading.Event(),), daemon=True, name='epg').start()
     print(f'STRM Indexer API ouvindo em {HOST}:{PORT}', flush=True)
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

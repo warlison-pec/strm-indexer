@@ -168,9 +168,12 @@ def selected():
     with connect() as c:
         rows = [dict(r) for r in c.execute('SELECT * FROM selected ORDER BY position, added_at')]
         settings = {'epg_url': _setting(c, 'epg_url'), 'only_ok': _setting(c, 'only_ok', '1') == '1'}
+    import epg
+    names = epg.labels()
     for r in rows:
         r.pop('url', None)            # o endereço da fonte não vai para o navegador
-    return {'items': rows, 'settings': settings, 'token': token(), 'test': dict(_test)}
+        r['epg'] = names.get(r['id'])
+    return {'items': rows, 'settings': settings, 'token': token(), 'test': dict(_test), 'epg': epg.summary()}
 
 
 def add(ids=None, q='', group='', source=''):
@@ -199,6 +202,9 @@ def add(ids=None, q='', group='', source=''):
                          VALUES(?,?,?,?,?,?,?,?,?)''',
                       (x['id'], x['name'], x['group'], x['logo'], x['tvg_id'], x['url'], x['source'], pos, now))
             added += 1
+    if added:
+        import epg
+        epg.auto_match()
     return {'added': added, 'limit_reached': count + added >= MAX_SELECTED}
 
 
@@ -236,6 +242,8 @@ def update(cid, name=None, group=None, number=None):
         return {'ok': True}
     with connect() as c:
         c.execute('UPDATE selected SET ' + ', '.join(fields) + ' WHERE id=?', (*params, str(cid)))
+    import epg
+    epg.state['dirty'] = True
     return {'ok': True}
 
 
@@ -353,19 +361,28 @@ def _attr(v):
     return str(v or '').replace('"', "'").replace('\n', ' ').strip()
 
 
-def playlist(t):
-    if not t or not secrets.compare_digest(str(t), token()):
+def valid_token(t):
+    return bool(t) and secrets.compare_digest(str(t), token())
+
+
+def playlist(t, base=''):
+    """Lista M3U. [base] = endereço público do indexador (para apontar o guia de programação)."""
+    if not valid_token(t):
         return None
+    import epg
     with connect() as c:
         only_ok = _setting(c, 'only_ok', '1') == '1'
-        epg = _setting(c, 'epg_url')
+        guide = _setting(c, 'epg_url')
         rows = [dict(r) for r in c.execute('SELECT * FROM selected ORDER BY position, added_at')]
-    header = '#EXTM3U' + (f' x-tvg-url="{_attr(epg)}" url-tvg="{_attr(epg)}"' if epg else '')
+        mapped = c.execute('SELECT 1 FROM selected WHERE epg_channel IS NOT NULL LIMIT 1').fetchone()
+    if mapped and base:
+        guide = f'{base}/strm-api/channels.xml?t={t}'   # nosso guia, só com os canais da lista
+    header = '#EXTM3U' + (f' x-tvg-url="{_attr(guide)}" url-tvg="{_attr(guide)}"' if guide else '')
     lines = [header]
     for r in rows:
         if only_ok and r['status'] != 'ok':
             continue
-        attrs = [f'tvg-id="{_attr(r["tvg_id"])}"', f'tvg-name="{_attr(r["name"])}"']
+        attrs = [f'tvg-id="{_attr(epg.out_id(r))}"', f'tvg-name="{_attr(r["name"])}"']
         if r['logo']:
             attrs.append(f'tvg-logo="{_attr(r["logo"])}"')
         if r['number'] is not None:
