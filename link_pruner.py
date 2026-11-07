@@ -98,6 +98,25 @@ def status():
             'state': dict(STATE), 'recent': recent}
 
 
+def remove_manual(url, kind='movie', source='', title=''):
+    """Retira um link à mão (ex.: na aba Revisão o filme não abriu). Some das próximas indexações e
+    pode ser desfeito em "Restaurar" da limpeza de links."""
+    now = time.time()
+    with connect() as c:
+        c.execute('''INSERT INTO links(h,url,kind,source,title,fails,dead,last_check,last_error,dead_at)
+                     VALUES(?,?,?,?,?,1,1,?,'Retirado manualmente',?)
+                     ON CONFLICT(h) DO UPDATE SET dead=1, last_check=excluded.last_check,
+                        last_error='Retirado manualmente', dead_at=excluded.dead_at''',
+                  (_h(url), url, kind, source, title, now, now))
+    _dead_cache['mtime'] = None
+    return {'ok': True}
+
+
+def is_protected(url):
+    """True se o link é usado por um STRM gerenciado ou é de um host liberado."""
+    return url in _protected()
+
+
 def restore(url=None):
     """Desfaz a exclusão (de um link ou de todos). Os links voltam na próxima reindexação."""
     with connect() as c:

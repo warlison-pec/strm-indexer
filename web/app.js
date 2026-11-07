@@ -160,7 +160,7 @@ $('logout').addEventListener('click', async () => {
 });
 
 /* ============================== Roteamento ============================== */
-const ROUTES = { '#/filmes': 'movie', '#/series': 'episode', '#/gerenciados': 'managed', '#/solicitacoes': 'requests', '#/canais': 'channels', '#/listas': 'sources' };
+const ROUTES = { '#/filmes': 'movie', '#/series': 'episode', '#/gerenciados': 'managed', '#/revisao': 'review', '#/solicitacoes': 'requests', '#/canais': 'channels', '#/listas': 'sources' };
 function route() {
   const view = ROUTES[location.hash] || 'movie';
   const changedType = view !== state.view;
@@ -171,6 +171,7 @@ function route() {
   $('viewManaged').classList.toggle('hidden', view !== 'managed');
   $('viewSources').classList.toggle('hidden', view !== 'sources');
   $('viewRequests').classList.toggle('hidden', view !== 'requests');
+  $('viewReview').classList.toggle('hidden', view !== 'review');
   $('viewChannels').classList.toggle('hidden', view !== 'channels');
   clearInterval(timers.playlist);
   clearInterval(timers.requests);
@@ -179,6 +180,7 @@ function route() {
     renderCatalogChrome();
     browse();
   } else if (view === 'managed') loadManaged();
+  else if (view === 'review') loadReview();
   else if (view === 'requests') { loadRequests(); timers.requests = setInterval(() => { if (!document.hidden) loadRequests(true); }, 5000); }
   else if (view === 'channels') loadChannels();
   else loadSources();
@@ -198,6 +200,7 @@ async function loadMeta() {
     $('statCategories').textContent = fmt(filters.categories.length);
     $('navMovies').textContent = c.movie ? compact(c.movie) : '';
     $('navSeries').textContent = c.episode ? compact(c.episode) : '';
+    reviewBadge();
     const when = new Date(stats.updated_at);
     $('lastUpdate').textContent = isNaN(when) ? '—' : when.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' });
     const sel = $('source');
@@ -1852,3 +1855,130 @@ document.addEventListener('keydown', e => {
   route();
   api('/managed').then(d => updateBadges(d.items)).catch(() => {});
 })();
+
+
+/* ============================== Revisão de versões (mesmo nome, anos diferentes) ============================== */
+const rv = { page: 1 };
+async function reviewBadge() {
+  try {
+    const d = await api('/review/years', { params: { limit: 1 } });
+    $('reviewBadge').textContent = d.pending; $('reviewBadge').classList.toggle('hidden', !d.pending);
+  } catch { /* sem catálogo ainda */ }
+}
+$('rvRefresh').addEventListener('click', () => loadReview());
+$('rvShow').addEventListener('change', () => { rv.page = 1; loadReview(); });
+let rvTimer = 0;
+$('rvSearch').addEventListener('input', () => { clearTimeout(rvTimer); rvTimer = setTimeout(() => { rv.page = 1; loadReview(); }, 350); });
+
+async function loadReview() {
+  const list = $('rvList');
+  list.replaceChildren(...[1, 2].map(() => h('div', { class: 'panel rv-card skeleton' }, h('div', { class: 'sk' }), h('div', { class: 'sk' }))));
+  try {
+    const q = $('rvSearch').value.trim();
+    const d = await api('/review/years', { params: { page: rv.page, limit: 15, show: $('rvShow').value, q } });
+    $('reviewBadge').textContent = d.pending; $('reviewBadge').classList.toggle('hidden', !d.pending);
+    const kpi = (label, value, cls) => h('div', { class: 'kpi ' + cls }, h('span', { text: label }), h('strong', { text: fmt(value) }));
+    $('rvKpis').replaceChildren(kpi('Pendentes', d.pending, d.pending ? 'bad' : 'ok'), kpi('Nesta lista', d.total, ''));
+    list.replaceChildren();
+    if (!d.items.length) {
+      list.append(q ? emptyState('search', 'Nada encontrado', `Nenhum título em revisão com "${q}". Tente "Todos" para incluir os já revisados.`)
+        : emptyState('check', 'Nada para revisar', 'Quando o mesmo filme aparecer com anos diferentes nas listas, ele aparece aqui.'));
+    }
+    for (const it of d.items) list.append(reviewCard(it));
+    const pages = Math.ceil(d.total / d.limit);
+    const pager = $('rvPager'); pager.replaceChildren();
+    if (pages > 1) {
+      const prev = btn('Anterior', { cls: 'sm ghost', disabled: rv.page <= 1, onclick: () => { rv.page--; loadReview(); scrollTo({ top: 0 }); } });
+      const next = btn('Próxima', { cls: 'sm ghost', disabled: rv.page >= pages, onclick: () => { rv.page++; loadReview(); scrollTo({ top: 0 }); } });
+      pager.append(prev, h('span', { class: 'muted', text: `Página ${rv.page} de ${pages}` }), next);
+    }
+  } catch (e) { list.replaceChildren(emptyState('alert', 'Não foi possível carregar', e.message)); }
+}
+
+function reviewCard(it) {
+  const years = it.variants.map(v => v.year).filter(Boolean);
+  const yearOptions = (sel) => {
+    const s = h('select', { class: 'rv-sel', attrs: { 'aria-label': 'Ano desta fonte' } },
+      h('option', { value: '', text: 'Sem ano', selected: sel == null }),
+      ...years.map(y => h('option', { value: y, text: String(y), selected: sel === y })),
+      h('option', { value: 'other', text: 'Outro ano…' }));
+    s.addEventListener('change', () => {
+      if (s.value !== 'other') return;
+      const y = parseInt(prompt('Ano de lançamento desta versão:') || '', 10);
+      if (y >= 1888 && y <= new Date().getFullYear() + 2) {
+        if (![...s.options].some(o => o.value === String(y))) s.insertBefore(h('option', { value: y, text: String(y) }), s.lastChild);
+        s.value = String(y);
+      } else s.value = '';
+    });
+    return s;
+  };
+  const preview = previewSection();
+  let lastDel = null;
+  const rows = it.entries.map(e => {
+    const sel = yearOptions(e.year);
+    sel.dataset.id = e.id; sel.dataset.orig = e.year ?? '';
+    // Testar (prévia) → Adicionar ao Jellyfin, como no catálogo; mais o ano e "Retirar"
+    const row = sourceRow(e, { managed: e.managed, preview });
+    row.classList.add('rv-row');
+    if (e.year == null) row.classList.add('noyear');
+    const acts = row.querySelector('.src-actions');
+    const del = btn('Retirar', { cls: 'sm ghost danger', ico: 'trash' });
+    del.title = 'Não abre? Tira este link do catálogo (pode desfazer em Listas e fontes → Restaurar)';
+    del.addEventListener('click', () => {
+      if (!confirm(`Retirar este link?\n\n${e.original_title}\n${e.source}\n\nEle some do catálogo e das próximas indexações. Dá para desfazer em "Restaurar" na limpeza de links.`)) return;
+      busy(del, async () => {
+        try { await post('/review/years/remove', { id: e.id }); row.remove(); toast('Link retirado', 'ok'); }
+        catch (err) { toast(err.message, 'bad'); }
+      });
+    });
+    acts.prepend(sel);
+    acts.append(del);
+    // "Adicionar" cria o STRM com o ano salvo: se mudou o ano aqui, salve antes
+    row.addEventListener('click', ev => {
+      const b = ev.target.closest('button');
+      if (b && b.textContent.includes('Testar')) { lastDel = del; document.querySelectorAll('.btn.attn').forEach(x => x.classList.remove('attn')); }
+      if (b && b.textContent.includes('Adicionar') && sel.value !== sel.dataset.orig) {
+        ev.stopImmediatePropagation(); ev.preventDefault();
+        toast('Clique em "Salvar" para gravar o ano desta fonte antes de adicionar ao Jellyfin.', 'bad');
+      }
+    }, true);
+    return row;
+  });
+  // não abriu na prévia: destaca o "Retirar" da fonte testada
+  preview.querySelector('video').addEventListener('error', () => lastDel?.classList.add('attn'));
+  const variants = h('div', { class: 'rv-variants' }, ...it.variants.map(v =>
+    pill((v.year ?? 'Sem ano') + ' · ' + v.count + (v.count === 1 ? ' fonte' : ' fontes'), v.year == null ? 'warn' : 'plain')));
+  const save = btn('Salvar', { cls: 'sm primary', ico: 'check' });
+  save.addEventListener('click', () => busy(save, async () => {
+    const items = [...card.querySelectorAll('.rv-sel')]
+      .filter(s => s.value !== s.dataset.orig)
+      .map(s => ({ id: Number(s.dataset.id), year: s.value ? Number(s.value) : null }));
+    try { const r = await post('/review/years/save', { normalized: it.normalized, items });
+      toast(r.changed ? `Revisado: ${r.changed} fonte(s) atualizada(s)` : 'Marcado como revisado', 'ok'); loadReview(); }
+    catch (e) { toast(e.message, 'bad'); }
+  }));
+  const mergeSel = h('select', { class: 'rv-sel', attrs: { 'aria-label': 'Juntar tudo em' } },
+    h('option', { value: '', text: 'Juntar tudo em…' }), ...years.map(y => h('option', { value: y, text: 'Tudo é o de ' + y })));
+  mergeSel.addEventListener('change', () => busy(save, async () => {
+    if (!mergeSel.value) return;
+    if (!confirm(`Juntar as ${it.entries_total} fontes de "${it.title}" como um só filme de ${mergeSel.value}?`)) { mergeSel.value = ''; return; }
+    try { await post('/review/years/save', { normalized: it.normalized, merge_year: Number(mergeSel.value) });
+      toast('Fontes juntadas em ' + mergeSel.value, 'ok'); loadReview(); }
+    catch (e) { toast(e.message, 'bad'); }
+  }));
+  const ok = btn(it.pending ? 'Está certo assim' : 'Reabrir', { cls: 'sm ghost' });
+  ok.title = it.pending ? 'Mantém as versões separadas como estão e mostra as fontes sem ano no catálogo' : 'Volta para os pendentes';
+  ok.addEventListener('click', () => busy(ok, async () => {
+    try { await post(it.pending ? '/review/years/dismiss' : '/review/years/reopen', { normalized: it.normalized }); loadReview(); }
+    catch (e) { toast(e.message, 'bad'); }
+  }));
+  const card = h('div', { class: 'panel rv-card' },
+    h('div', { class: 'rv-top' },
+      h('div', {}, h('h3', { text: it.title }), variants,
+        it.no_year ? h('p', { class: 'muted rv-hint', text: `${it.no_year} fonte(s) sem ano estão fora do catálogo até você escolher a versão.` }) : null),
+      h('div', { class: 'rv-actions' }, mergeSel, ok, save)),
+    h('div', { class: 'rv-rows' }, ...rows),
+    preview,
+    it.entries.length < it.entries_total ? h('p', { class: 'muted', text: `Mostrando ${it.entries.length} de ${it.entries_total} fontes.` }) : null);
+  return card;
+}

@@ -52,6 +52,7 @@
       <a class="nav-item" href="#/series" data-view="episode"><svg><use href="#i-tv"/></svg><span>Séries</span><em id="navSeries"></em></a>
       <span class="nav-label">Gerenciamento</span>
       <a class="nav-item" href="#/gerenciados" data-view="managed"><svg><use href="#i-shield"/></svg><span>Gerenciados</span><b id="alertBadge" class="badge hidden"></b></a>
+      <a class="nav-item" href="#/revisao" data-view="review"><svg><use href="#i-layers"/></svg><span>Revisão</span><b id="reviewBadge" class="badge hidden"></b></a>
       <a class="nav-item" href="#/solicitacoes" data-view="requests"><svg><use href="#i-bell"/></svg><span>Solicitações</span><b id="reqBadge" class="badge info hidden"></b></a>
       <a class="nav-item" href="#/canais" data-view="channels"><svg><use href="#i-antenna"/></svg><span>Canais</span><em id="navChannels"></em></a>
       <a class="nav-item" href="#/listas" data-view="sources"><svg><use href="#i-list"/></svg><span>Listas e fontes</span></a>
@@ -157,6 +158,24 @@
     </section>
 
     <!-- Solicitações vindas do Jellyfin -->
+    <section class="view hidden" id="viewReview">
+      <div class="page-head">
+        <div><span class="eyebrow">Filmes</span><h1>Revisão de versões</h1>
+          <p>Filmes com o mesmo nome e anos diferentes (refilmagens, ou listas com o ano errado). Nada aqui é juntado sozinho:
+            cada ano é um card próprio no catálogo, e as fontes <b>sem ano</b> ficam escondidas até você dizer de qual versão são.</p></div>
+        <div class="rv-head-actions">
+          <label class="rv-search"><svg><use href="#i-search"/></svg><input id="rvSearch" type="search" placeholder="Buscar pelo nome…" maxlength="80" autocomplete="off" aria-label="Buscar na revisão"></label>
+          <div class="select"><select id="rvShow" aria-label="Mostrar">
+            <option value="pending">Pendentes</option><option value="all">Todos (inclui revisados)</option>
+          </select><svg><use href="#i-chev"/></svg></div>
+          <button class="btn" id="rvRefresh" type="button"><svg><use href="#i-refresh"/></svg>Atualizar</button>
+        </div>
+      </div>
+      <div class="kpi-row" id="rvKpis"></div>
+      <div id="rvList" class="rv-list"></div>
+      <div class="pager" id="rvPager"></div>
+    </section>
+
     <section class="view hidden" id="viewRequests">
       <div class="page-head">
         <div><span class="eyebrow">Jellyfin</span><h1>Solicitações</h1><p>Pedidos feitos pela busca do Jellyfin. A aprovação é automática quando a fonte passa na validação.</p></div>

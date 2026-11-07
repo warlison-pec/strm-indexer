@@ -49,6 +49,8 @@ def clean_title(s):
         prev = t
         t = re.sub(r'[\s\-–:]+' + _TAG_WORDS + r'\s*$', '', t.strip(), flags=re.I)
     t = re.sub(r'\s+', ' ', t).strip(' -._:')
+    if len(t) > 2 and t[0] in '"“\'«' and t[-1] in '"”\'»':     # “O Morro dos Ventos Uivantes”
+        t = t[1:-1].strip()
     return t or (s or '').strip()
 
 
@@ -66,8 +68,13 @@ def parse_title(s, category):
             series = loose
         return 'episode', series or s, norm(series or s), int(years[-1]) if years else None, int(ep[1]), int(ep[2])
     kind = 'movie' if category.upper().startswith('FILMES') else ('unknown' if not category else 'other')
-    years = YEAR.findall(s)
-    title = re.sub(r'[\[(]\s*(?:19|20)\d{2}\s*[\])]', ' ', s) if kind == 'movie' else s
+    # "Corrida Mortal 2050", "Blade Runner (2049)": ano depois do ano que vem não é ano de lançamento
+    max_year = datetime.now().year + 1
+    years = [y for y in YEAR.findall(s) if int(y) <= max_year]
+    # "(2011)" sai do nome; "(2049)" não é ano, é parte do nome ("Blade Runner 2049")
+    title = re.sub(r'[\[(]\s*((?:19|20)\d{2})\s*[\])]',
+                   lambda m: ' ' if int(m.group(1)) <= max_year or len(re.findall(r'(?<!\d)' + m.group(1) + r'(?!\d)', s)) > 1
+                   else ' ' + m.group(1) + ' ', s) if kind == 'movie' else s
     title = re.sub(r'\[[^\]]{0,70}\]', ' ', title)
     title = re.sub(r'\s+', ' ', title).strip(' -._')
     if kind == 'movie':
@@ -84,7 +91,7 @@ def parse_title(s, category):
                 title = rest
         # Ano do filme: o entre parênteses; senão um ano que não faça parte do próprio título
         # ("Blade Runner 2049" e "1917" não têm ano informado).
-        paren = [int(y) for y in re.findall(r'[\[(]\s*((?:19|20)\d{2})\s*[\])]', s)]
+        paren = [int(y) for y in re.findall(r'[\[(]\s*((?:19|20)\d{2})\s*[\])]', s) if int(y) <= max_year]
         if paren:
             years = [str(paren[-1])]
         else:
@@ -180,6 +187,12 @@ def build():
             conn.executemany('''INSERT INTO entries
                 (source,source_order,original_title,title,normalized,category,kind,year,season,episode,host,media_url)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''', batch)
+        # Decisões da aba Revisão (fonte X é do filme de 2011…) valem também nesta indexação
+        import year_review
+        year_review.apply(conn)
+        conn.execute('CREATE TEMP TABLE keep_no_year (media_url TEXT PRIMARY KEY)')
+        conn.executemany('INSERT OR IGNORE INTO keep_no_year VALUES (?)',
+                         [(u,) for u, y in year_review.assignments().items() if y is None])
         conn.executescript('''
             CREATE INDEX idx_search ON entries(normalized, kind, year, season, episode);
             -- Filme sem ano numa lista e com ano em outra ("Matrix" e "Matrix (1999)"): completa o ano quando
@@ -187,12 +200,14 @@ def build():
             UPDATE entries SET year = (
                 SELECT MIN(o.year) FROM entries o
                 WHERE o.kind='movie' AND o.normalized=entries.normalized AND o.year IS NOT NULL)
-            WHERE kind='movie' AND year IS NULL AND (
+            WHERE kind='movie' AND year IS NULL AND media_url NOT IN (SELECT media_url FROM keep_no_year) AND (
                 SELECT COUNT(DISTINCT o.year) FROM entries o
                 WHERE o.kind='movie' AND o.normalized=entries.normalized AND o.year IS NOT NULL) = 1;
             CREATE INDEX idx_group ON entries(kind, normalized, season, episode);
             CREATE INDEX idx_source ON entries(source);
         ''')
+        # Mesmo nome com anos diferentes: não junta, manda para a aba Revisão
+        year_review.refresh_conflicts(conn)
         metadata = {'updated_at': datetime.now(timezone.utc).isoformat(), 'sources': [p.name for p in sources], 'counts': dict(stats)}
         conn.execute('INSERT INTO info VALUES (?,?)', ('metadata', json.dumps(metadata, ensure_ascii=False)))
         conn.commit()

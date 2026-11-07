@@ -117,8 +117,13 @@ def parse_metadata_title(title):
       '007 Sem Tempo para Morrer'               -> unchanged (no separator after the number)
     """
     raw = str(title or '').strip()
-    t = _BRACKET.sub(' ', raw)
     year = None
+    # "Título #2011" (versões de anos diferentes): busca exatamente aquele ano
+    mk = _re.search(r'\s#((?:18|19|20)\d{2})$', raw)
+    if mk:
+        year = int(mk.group(1))
+        raw = raw[:mk.start()].strip()
+    t = _BRACKET.sub(' ', raw)
     for _ in range(4):
         before = t
         t = _PAREN_TAG.sub(' ', t).strip()

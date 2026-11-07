@@ -29,6 +29,11 @@ def setup():
 def canonical(kind,title):
     if kind not in ('movie','episode'): raise ValueError('Tipo inválido')
     if not isinstance(title,str) or not 2 <= len(title) <= 180: raise ValueError('Título inválido')
+    # "Título #2011": filme com versões de anos diferentes (aba Revisão) -> metadados próprios daquele ano
+    m=re.search(r'\s#((?:18|19|20)\d{2})$',title)
+    if m:
+        base=re.sub(r'\s*\((?:19|20)\d{2}\)\s*$','',title[:m.start()]).strip()
+        return kind+':'+norm(base)+'#'+m.group(1)
     title=re.sub(r'\s*\((?:19|20)\d{2}\)\s*$','',title).strip()
     return kind+':'+norm(title)
 

@@ -20,6 +20,7 @@ import content_filter
 import saimo_catalog
 import channels
 import epg
+import year_review
 from catalog_identity import key_for
 import os
 from pathlib import Path
@@ -109,16 +110,24 @@ def browse(args):
     group = 'normalized, COALESCE(year, -1)' if kind == 'movie' else 'normalized'
     with sqlite3.connect(f'file:{DB}?mode=ro', uri=True, timeout=15) as db:
         db.row_factory = sqlite3.Row
+        # Mesmo nome com anos diferentes: as fontes sem ano ficam na aba Revisão até alguém decidir
+        conflicts = kind == 'movie' and year_review.has_table(db)
+        if conflicts:
+            where += ' AND ' + year_review.hidden_condition()
+        conflict_col = ('MAX(normalized IN (SELECT normalized FROM year_conflicts)) conflict'
+                        if conflicts else '0 conflict')
         total = db.execute('SELECT COUNT(*) FROM (SELECT 1 FROM entries WHERE ' + where + ' GROUP BY ' + group + ')', params).fetchone()[0]
         grouped = ('SELECT MIN(id) id, MIN(title) title, MIN(year) year, MIN(category) category, '
                    'MIN(source) source, COUNT(*) entries, COUNT(DISTINCT season) seasons, '
-                   'COUNT(DISTINCT source) source_count, MIN(normalized) norm FROM entries WHERE ' + where +
+                   'COUNT(DISTINCT source) source_count, MIN(normalized) norm, ' + conflict_col + ' FROM entries WHERE ' + where +
                    ' GROUP BY ' + group)
         # Nota e ano dos metadados (outro banco): ordena por mais recentes / melhor avaliados
         has_meta = enrich.DB.exists()
         if has_meta:
             db.execute("ATTACH DATABASE ? AS meta", (f'file:{enrich.DB}?mode=ro',))
-            join = (' LEFT JOIN meta.metadata m ON m.content_key = ? || g.norm')
+            # versões de anos diferentes: cada ano tem os próprios metadados ("movie:titulo#2011")
+            join = (" LEFT JOIN meta.metadata m ON m.content_key = ? || g.norm || "
+                    "CASE WHEN g.conflict AND g.year IS NOT NULL THEN '#' || g.year ELSE '' END")
             cols = ', m.rating rating, m.votes votes, COALESCE(g.year, m.year) yr'
             jparams = [('movie:' if kind == 'movie' else 'episode:')]
         else:
@@ -136,8 +145,11 @@ def browse(args):
         for it in items:
             it.pop('norm', None)
     kind_key = 'movie' if kind == 'movie' else 'episode'
-    meta = enrich.for_cards(kind, [x['title'] for x in items])
-    automatic.enqueue(kind, items)
+    # Título para metadados: com versões de anos diferentes, cada card busca os do seu ano
+    meta_titles = [year_review.meta_title(x['title'], x.get('year'), x.get('conflict')) for x in items]
+    meta = enrich.for_cards(kind, meta_titles)
+    plain = enrich.for_cards(kind, [x['title'] for x in items if x.get('conflict')])
+    automatic.enqueue(kind, [dict(x, title=t) for x, t in zip(items, meta_titles)])
     if kind == 'movie':
         states = media.content_states([key_for('movie',x['title'],x['year']) for x in items])
     else:
@@ -146,8 +158,13 @@ def browse(args):
             managed = c.execute("SELECT title, COUNT(*) FROM managed WHERE kind='episode' GROUP BY title").fetchall()
         from indexer import norm as normalize
         counts={normalize(t):n for t,n in managed}
-    for it in items:
-        it['metadata'] = meta.get(it['title'])
+    for it, mt in zip(items, meta_titles):
+        it['metadata'] = meta.get(mt)
+        if it.get('conflict') and not it['metadata']:
+            # enquanto os metadados do ano não chegam: usa os gerais só se forem do mesmo filme (ano ±1)
+            p = plain.get(it['title'])
+            if p and it.get('year') and p.get('year') and abs(int(p['year']) - int(it['year'])) <= 1:
+                it['metadata'] = p
         if kind == 'movie': it['managed'] = states.get(key_for('movie',it['title'],it['year']))
         else: it['managed_count'] = counts.get(norm(it['title']),0)
     return {'total': total, 'limit': limit, 'page': page, 'items': items}
@@ -376,6 +393,20 @@ class Handler(BaseHTTPRequestHandler):
                         result['import'] = {'started': False}   # já havia uma indexação rodando
                 return self.send_json(200, result)
             except (ValueError, OSError, TypeError) as exc:
+                return self.send_json(400, {'error': str(exc)})
+        if parsed.path in ('/review/years/save', '/review/years/dismiss', '/review/years/reopen', '/review/years/remove'):
+            if not self.guard(mutable=True): return
+            try:
+                data = self._json_body(65536)
+                n = data.get('normalized', '')
+                if parsed.path == '/review/years/remove':
+                    return self.send_json(200, year_review.remove(data.get('id')))
+                if parsed.path == '/review/years/dismiss':
+                    return self.send_json(200, year_review.dismiss(n))
+                if parsed.path == '/review/years/reopen':
+                    return self.send_json(200, year_review.reopen(n))
+                return self.send_json(200, year_review.save(n, data.get('items') or [], data.get('merge_year')))
+            except (ValueError, TypeError, sqlite3.Error) as exc:
                 return self.send_json(400, {'error': str(exc)})
         if parsed.path in ('/prune/run', '/prune/restore'):
             if not self.guard(mutable=True): return
@@ -647,6 +678,22 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path.startswith('/preview/'):
             url = media.preview_url(parsed.path[len('/preview/'):])
             return self.send_redirect(url) if url else self.send_json(410, {'error': 'Prévia expirada'})
+        if parsed.path == '/review/years':
+            if not self.guard(): return
+            try:
+                args = parse_qs(parsed.query)
+                d = year_review.listing(args.get('page', ['1'])[0], args.get('limit', ['20'])[0],
+                                        args.get('show', ['pending'])[0], args.get('q', [''])[0])
+                # quais versões já estão no Jellyfin (STRM gerenciado)
+                keys = {(e['title'], e['year']): key_for('movie', e['title'], e['year'])
+                        for it in d['items'] for e in it['entries'] if e['year']}
+                states = media.content_states(list(set(keys.values()))) if keys else {}
+                for it in d['items']:
+                    for e in it['entries']:
+                        e['managed'] = bool(e['year'] and states.get(keys.get((e['title'], e['year']))))
+                return self.send_json(200, d)
+            except (ValueError, sqlite3.Error) as exc:
+                return self.send_json(400, {'error': str(exc)})
         if parsed.path == '/prune/status':
             if not self.guard(): return
             return self.send_json(200, link_pruner.status())
