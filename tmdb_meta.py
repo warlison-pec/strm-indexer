@@ -57,6 +57,7 @@ def search(title, kind='movie', year=None):
                       'original_title': x.get('original_title' if kind == 'movie' else 'original_name'),
                       'year': int(date[:4]) if re.fullmatch(r'\d{4}', date[:4]) else None,
                       'overview': (x.get('overview') or '')[:450],
+                      'rating': x.get('vote_average'), 'votes': x.get('vote_count'),
                       'poster': ('https://image.tmdb.org/t/p/w500' + x['poster_path']) if x.get('poster_path') else None})
     return {'items': items, 'configured': True}
 

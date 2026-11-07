@@ -67,5 +67,5 @@ def search(title, kind):
         items.append({'id': ident, 'title': label.strip(),
                       'original_title': alternate if isinstance(alternate, str) else '',
                       'year': year, 'overview': str(entry.get('overview') or '')[:2000],
-                      'poster': poster})
+                      'poster': poster, 'rating': entry.get('voteAverage'), 'votes': entry.get('voteCount')})
     return {'items': items}

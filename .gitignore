@@ -19,3 +19,9 @@ backend/
 __pycache__/
 *.pyc
 /p
+backups/
+*.bak-*
+*.patch
+saimo*
+SAIMO-*
+atualizar-saimo.sh

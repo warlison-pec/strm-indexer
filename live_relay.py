@@ -74,7 +74,8 @@ def _parse_m3u(text):
             if url.startswith(('http://', 'https://')) and not VOD.search(url) and '/movie/' not in url and '/series/' not in url:
                 name = title or attrs.get('tvg-name') or 'Canal'
                 out.append({'id': attrs.get('tvg-id') or _norm(name), 'tvg': attrs.get('tvg-id') or '', 'name': name,
-                            'group': attrs.get('group-title') or 'Sem grupo', 'logo': attrs.get('tvg-logo') or None, 'url': url})
+                            'group': attrs.get('group-title') or 'Sem grupo', 'logo': attrs.get('tvg-logo') or None, 'url': url,
+                            'number': (attrs.get('tvg-chno') or '').strip()[:8] or None})
                 if len(out) >= MAX_CHANNELS:
                     break
             title, attrs = None, {}
@@ -195,13 +196,21 @@ def relay(handler, url, token):
             handler.send_header('Content-Length', length)
         handler.send_header('Cache-Control', 'no-store')
         handler.end_headers()
+        try:  # o timeout de 20 s vale para conectar; no fluxo ao vivo, tolera pausas da fonte
+            resp.fp.raw._sock.settimeout(90)
+        except AttributeError:
+            pass
         handler.wfile.write(first)
+        handler.wfile.flush()
         while True:
-            chunk = resp.read(64 * 1024)
+            chunk = resp.read1(64 * 1024)
             if not chunk:
                 break
             handler.wfile.write(chunk)
+            handler.wfile.flush()
     except (BrokenPipeError, ConnectionResetError):
         pass  # o usuário fechou o player
+    except (TimeoutError, OSError) as exc:
+        print('LIVETV: fonte sem dados ou conexão perdida:', type(exc).__name__, flush=True)
     finally:
         resp.close()

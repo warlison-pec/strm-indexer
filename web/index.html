@@ -107,6 +107,7 @@
         <button class="btn" id="allCats" type="button"><svg><use href="#i-layers"/></svg><span id="allCatsLabel">Categorias</span></button>
         <button class="btn" id="cfBtn" type="button" title="Bloquear categorias (ex.: adultos) nas buscas do Jellyfin e do StreamBox"><svg><use href="#i-shield"/></svg><span>Filtro</span><small class="cf-badge hidden" id="cfBadge"></small></button>
         <div class="toolbar-right">
+          <div class="select"><select id="sort" aria-label="Ordenar"><option value="recent">Mais recentes</option><option value="rating">Mais bem avaliados</option><option value="az">A–Z</option></select><svg><use href="#i-chev"/></svg></div>
           <div class="select"><select id="source" aria-label="Lista"><option value="">Todas as listas</option></select><svg><use href="#i-chev"/></svg></div>
           <button class="btn ghost hidden" id="clear" type="button"><svg><use href="#i-x"/></svg>Limpar</button>
         </div>
@@ -189,8 +190,24 @@
               <button class="btn sm ghost" id="chTestNew" type="button">Testar novos</button>
               <button class="btn sm ghost" id="chFindAlts" type="button" title="Procura o mesmo canal em outras listas para usar se a fonte principal cair">Buscar reservas</button>
               <button class="btn sm ghost" id="chRenumber" type="button">Numerar</button>
+              <button class="btn sm ghost" id="chOrganize" type="button" title="Separa os canais por categoria (Abertos, Notícias, Esportes, Filmes e Séries, Infantil…) e renumera">Organizar por categoria</button>
               <button class="btn sm ghost" id="chDropFailed" type="button"><svg><use href="#i-trash"/></svg>Remover com falha</button>
             </div></div>
+          <div class="ch-org hidden" id="chOrgBox">
+            <strong>Organizar por categoria</strong>
+            <p class="note">Classifica cada canal pelo grupo da lista e pelo nome (Abertos, Notícias, Esportes, Filmes e Séries, Infantil, Documentários, Música, Religiosos, Outros), mantendo a ordem dentro de cada categoria. A categoria vira o grupo na lista gerada e pode ser trocada no botão de editar do canal.</p>
+            <div class="ch-org-row">
+              <div class="select"><select id="chOrgNum" aria-label="Numeração">
+                <option value="seq">Numerar 1, 2, 3…</option>
+                <option value="blocks">Numerar em blocos (Abertos 1, Notícias 100, Esportes 200…)</option>
+                <option value="keep">Manter os números atuais</option>
+              </select><svg><use href="#i-chev"/></svg></div>
+              <label class="cf-toggle"><input type="checkbox" id="chOrgAuto"><span><b>Automático</b><small>canais novos já entram na categoria certa</small></span></label>
+              <button class="btn sm primary" id="chOrgGo" type="button">Organizar agora</button>
+              <button class="btn sm ghost" id="chOrgClose" type="button">Fechar</button>
+            </div>
+            <p class="note" id="chOrgResult"></p>
+          </div>
           <div class="ch-progress hidden" id="chProgress"><i></i><span></span></div>
           <div class="ch-filters"><label class="mini-search"><svg><use href="#i-search"/></svg><input id="chSelQ" placeholder="Filtrar minha lista…" autocomplete="off"></label>
             <div class="segmented" id="chSelShow"><button type="button" data-s="all" class="on">Todos</button><button type="button" data-s="ok">OK</button><button type="button" data-s="fail">Falha</button><button type="button" data-s="untested">Novos</button></div></div>
@@ -242,10 +259,17 @@
           <small id="dzHint">ou clique para escolher · até 100 MiB</small>
         </label>
         <form class="panel github-card" id="githubForm">
-          <div class="gh-head"><svg><use href="#i-github"/></svg><div><strong>Importar do GitHub</strong><small>Link raw ou github.com/…/blob/…</small></div></div>
-          <input id="githubPlaylist" type="url" placeholder="https://github.com/usuario/repo/blob/main/lista.m3u8" required>
+          <div class="gh-head"><svg><use href="#i-github"/></svg><div><strong>Importar por link</strong><small>GitHub (raw ou /blob/) ou link do provedor (get.php?…&amp;type=m3u_plus)</small></div></div>
+          <input id="githubPlaylist" type="url" placeholder="https://… link da lista M3U" required>
           <button class="btn primary" id="addGithub" type="submit"><svg><use href="#i-plus"/></svg>Adicionar lista</button>
         </form>
+      </div>
+      <div class="panel prune-panel">
+        <div class="panel-head"><h3><svg><use href="#i-shield"/></svg>Limpeza semanal de links</h3>
+          <div class="prune-actions"><button class="btn sm" id="pruneRun" type="button"><svg><use href="#i-refresh"/></svg>Rodar agora</button>
+          <button class="btn sm ghost" id="pruneRestore" type="button">Restaurar excluídos</button></div></div>
+        <p class="note" id="pruneInfo"></p>
+        <div id="pruneList" class="prune-list"></div>
       </div>
       <div class="results-head"><h2>Arquivos</h2><span class="count" id="filesCount"></span></div>
       <div id="sourceList" class="file-grid"></div>

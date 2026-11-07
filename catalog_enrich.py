@@ -21,6 +21,10 @@ def setup():
           content_key TEXT PRIMARY KEY, kind TEXT NOT NULL, title TEXT NOT NULL,
           provider TEXT NOT NULL, provider_id TEXT NOT NULL, year INTEGER,
           overview TEXT, poster_file TEXT, updated_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
+        # nota e votos (TMDB/TVmaze/Seerr/Jellyfin) para ordenar o catálogo pelos melhor avaliados
+        cols={r[1] for r in c.execute('PRAGMA table_info(metadata)')}
+        if 'rating' not in cols: c.execute('ALTER TABLE metadata ADD COLUMN rating REAL')
+        if 'votes' not in cols: c.execute('ALTER TABLE metadata ADD COLUMN votes INTEGER')
 
 def canonical(kind,title):
     if kind not in ('movie','episode'): raise ValueError('Tipo inválido')
@@ -50,7 +54,15 @@ def _image_fetch(url):
             return name
     except Exception: return None
 
-def save(kind,title,provider,provider_id,matched_title,year,overview,poster):
+def _num(v, lo, hi):
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return None
+    return v if lo <= v <= hi else None
+
+
+def save(kind,title,provider,provider_id,matched_title,year,overview,poster,rating=None,votes=None):
     if provider not in ('tmdb','tvdb','tvmaze','jellyfin','seerr'): raise ValueError('Provedor inválido')
     if provider == 'jellyfin':
         provider_id = str(provider_id)
@@ -63,12 +75,15 @@ def save(kind,title,provider,provider_id,matched_title,year,overview,poster):
     art=_image_fetch(poster)
     with sqlite3.connect(DB) as c:
         old=c.execute('SELECT poster_file FROM metadata WHERE content_key=?',(key,)).fetchone()
-        c.execute('''INSERT INTO metadata(content_key,kind,title,provider,provider_id,year,overview,poster_file)
-          VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(content_key) DO UPDATE SET
+        rating=_num(rating,0,10); votes=_num(votes,0,1e9)
+        c.execute('''INSERT INTO metadata(content_key,kind,title,provider,provider_id,year,overview,poster_file,rating,votes)
+          VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(content_key) DO UPDATE SET
           title=excluded.title,provider=excluded.provider,provider_id=excluded.provider_id,
           year=excluded.year,overview=excluded.overview,poster_file=COALESCE(excluded.poster_file,metadata.poster_file),
+          rating=COALESCE(excluded.rating,metadata.rating),votes=COALESCE(excluded.votes,metadata.votes),
           updated_at=CURRENT_TIMESTAMP''',
-          (key,kind,matched_title,provider,provider_id,int(year) if year else None,(overview or '')[:2000],art))
+          (key,kind,matched_title,provider,provider_id,int(year) if year else None,(overview or '')[:2000],art,
+           rating,int(votes) if votes is not None else None))
     return {'ok':True,'provider':provider,'id':provider_id,'poster_saved':bool(art)}
 
 def for_cards(kind,titles):

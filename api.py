@@ -11,11 +11,13 @@ import playlist_admin as playlists
 import tmdb_meta as tmdb
 import series_bulk as bulk
 import series_watch
+import link_pruner
 import catalog_enrich as enrich
 import metadata_auto as automatic
 import tvdb_meta as tvdb
 import jellyfin_bridge as bridge
 import content_filter
+import saimo_catalog
 import channels
 import epg
 from catalog_identity import key_for
@@ -85,6 +87,9 @@ def browse(args):
         raise ValueError('Filtro muito longo')
     limit = max(1, min(60, int(args.get('limit', ['24'])[0])))
     page = max(1, min(10000, int(args.get('page', ['1'])[0])))
+    sort = args.get('sort', ['recent'])[0]
+    if sort not in ('recent', 'rating', 'az'):
+        sort = 'recent'
     conditions = ['kind = ?']
     params = [kind]
     if q:
@@ -105,11 +110,31 @@ def browse(args):
     with sqlite3.connect(f'file:{DB}?mode=ro', uri=True, timeout=15) as db:
         db.row_factory = sqlite3.Row
         total = db.execute('SELECT COUNT(*) FROM (SELECT 1 FROM entries WHERE ' + where + ' GROUP BY ' + group + ')', params).fetchone()[0]
-        sql = ('SELECT MIN(id) id, MIN(title) title, MIN(year) year, MIN(category) category, '
-               'MIN(source) source, COUNT(*) entries, COUNT(DISTINCT season) seasons, '
-               'COUNT(DISTINCT source) source_count FROM entries WHERE ' + where +
-               ' GROUP BY ' + group + ' ORDER BY MIN(normalized) LIMIT ? OFFSET ?')
-        items = [dict(x) for x in db.execute(sql, params + [limit, (page-1)*limit])]
+        grouped = ('SELECT MIN(id) id, MIN(title) title, MIN(year) year, MIN(category) category, '
+                   'MIN(source) source, COUNT(*) entries, COUNT(DISTINCT season) seasons, '
+                   'COUNT(DISTINCT source) source_count, MIN(normalized) norm FROM entries WHERE ' + where +
+                   ' GROUP BY ' + group)
+        # Nota e ano dos metadados (outro banco): ordena por mais recentes / melhor avaliados
+        has_meta = enrich.DB.exists()
+        if has_meta:
+            db.execute("ATTACH DATABASE ? AS meta", (f'file:{enrich.DB}?mode=ro',))
+            join = (' LEFT JOIN meta.metadata m ON m.content_key = ? || g.norm')
+            cols = ', m.rating rating, m.votes votes, COALESCE(g.year, m.year) yr'
+            jparams = [('movie:' if kind == 'movie' else 'episode:')]
+        else:
+            join, cols, jparams = '', ', NULL rating, NULL votes, g.year yr', []
+        # nota "confiável": com poucos votos, uma nota 10 não passa na frente de um filme consagrado
+        score = 'CASE WHEN COALESCE(votes,0) >= 50 OR votes IS NULL THEN COALESCE(rating,0) ELSE COALESCE(rating,0)*0.6 END'
+        order = {
+            'recent': 'COALESCE(yr, -1) DESC, ' + score + ' DESC, norm',
+            'rating': '(rating IS NULL), ' + score + ' DESC, COALESCE(yr, -1) DESC, norm',
+            'az': 'norm',
+        }[sort]
+        sql = ('SELECT * FROM (SELECT g.*' + cols + ' FROM (' + grouped + ') g' + join + ') '
+               'ORDER BY ' + order + ' LIMIT ? OFFSET ?')
+        items = [dict(x) for x in db.execute(sql, params + jparams + [limit, (page-1)*limit])]
+        for it in items:
+            it.pop('norm', None)
     kind_key = 'movie' if kind == 'movie' else 'episode'
     meta = enrich.for_cards(kind, [x['title'] for x in items])
     automatic.enqueue(kind, items)
@@ -283,6 +308,10 @@ class Handler(BaseHTTPRequestHandler):
                     r = channels.reorder(d.get('ids'))
                 elif parsed.path == '/channels/renumber':
                     r = channels.renumber(d.get('start', 1))
+                elif parsed.path == '/channels/organize':
+                    r = channels.organize(d.get('numbering', 'seq'))
+                elif parsed.path == '/channels/auto-organize':
+                    r = channels.set_auto_organize(d.get('mode', ''))
                 elif parsed.path == '/channels/settings':
                     r = channels.save_settings(d.get('epg_url'), d.get('only_ok'), bool(d.get('new_token')), d.get('link_base'), d.get('stream_mode'))
                 elif parsed.path == '/channels/alternates/find':
@@ -347,6 +376,15 @@ class Handler(BaseHTTPRequestHandler):
                         result['import'] = {'started': False}   # já havia uma indexação rodando
                 return self.send_json(200, result)
             except (ValueError, OSError, TypeError) as exc:
+                return self.send_json(400, {'error': str(exc)})
+        if parsed.path in ('/prune/run', '/prune/restore'):
+            if not self.guard(mutable=True): return
+            try:
+                if parsed.path == '/prune/run':
+                    return self.send_json(200, link_pruner.start_now())
+                data = self._json_body(4096)
+                return self.send_json(200, link_pruner.restore(data.get('url') or None))
+            except (ValueError, TypeError) as exc:
                 return self.send_json(400, {'error': str(exc)})
         if parsed.path in ('/series/watch', '/series/watch/check'):
             if not self.guard(mutable=True): return
@@ -602,11 +640,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_login_redirect()
             return self.send_static(*static[parsed.path])
         if parsed.path.startswith('/play/'):
-            url = media.get_play_url(parsed.path[len('/play/'):])
-            return self.send_redirect(url) if url else self.send_json(404, {'error': 'Fonte não disponível'})
+            # HLS ganha o tipo certo (o ffmpeg novo do Jellyfin exige); vídeos comuns seguem redirecionados
+            if media.serve_play(self, parsed.path[len('/play/'):], parsed.query):
+                return
+            return self.send_json(404, {'error': 'Fonte não disponível'})
         if parsed.path.startswith('/preview/'):
             url = media.preview_url(parsed.path[len('/preview/'):])
             return self.send_redirect(url) if url else self.send_json(410, {'error': 'Prévia expirada'})
+        if parsed.path == '/prune/status':
+            if not self.guard(): return
+            return self.send_json(200, link_pruner.status())
         if parsed.path in ('/series/watch', '/series/watched'):
             if not self.guard(): return
             try:
@@ -624,6 +667,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(200,result)
             except (ValueError,TypeError) as exc:
                 return self.send_json(400,{'error':str(exc)})
+        if parsed.path in ('/saimo/status', '/saimo/search'):
+            if not self.guard(): return
+            try:
+                if parsed.path == '/saimo/status':
+                    return self.send_json(200, saimo_catalog.status())
+                args = parse_qs(parsed.query)
+                return self.send_json(200, saimo_catalog.search(
+                    args.get('q', [''])[0], args.get('kind', [''])[0],
+                    int(args.get('limit', ['30'])[0])))
+            except (ValueError, sqlite3.Error) as exc:
+                return self.send_json(400, {'error': str(exc)})
         if parsed.path == '/playlists/status':
             if not self.guard(): return
             return self.send_json(200, playlists.status())
@@ -718,6 +772,7 @@ if __name__ == '__main__':
     threading.Thread(target=automatic.loop,args=(threading.Event(),),daemon=True).start()
     bulk.setup()
     threading.Thread(target=bulk.loop,args=(threading.Event(),),daemon=True).start()
+    threading.Thread(target=link_pruner.loop, args=(threading.Event(),), daemon=True, name='link-prune').start()
     series_watch.setup()
     threading.Thread(target=series_watch.loop, args=(threading.Event(),), daemon=True, name='series-watch').start()
     threading.Thread(target=media.run_monitor, args=(threading.Event(),), daemon=True).start()

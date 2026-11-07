@@ -21,7 +21,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 
-from indexer import DB
+from indexer import DB, norm
 from catalog_identity import key_for, from_managed, compatible
 
 DATA = Path(os.environ.get('INDEXER_STATE_DIR', '/app/data')).resolve()
@@ -79,8 +79,12 @@ def initialize():
         columns = {r[1] for r in c.execute('PRAGMA table_info(managed)')}
         if 'content_key' not in columns:
             c.execute('ALTER TABLE managed ADD COLUMN content_key TEXT')
-        for row in c.execute('SELECT * FROM managed WHERE content_key IS NULL').fetchall():
-            c.execute('UPDATE managed SET content_key=? WHERE key=?', (from_managed(row), row['key']))
+        # Recalcula a identidade do conteúdo com a normalização atual (ex.: "… LEG" e "… (L)" viraram
+        # o mesmo título): sem isso o mesmo episódio poderia ser adicionado de novo por outra lista.
+        for row in c.execute('SELECT * FROM managed').fetchall():
+            new = from_managed(row)
+            if new and new != row['content_key']:
+                c.execute('UPDATE managed SET content_key=? WHERE key=?', (new, row['key']))
         c.execute('CREATE INDEX IF NOT EXISTS idx_managed_content ON managed(content_key)')
 
 
@@ -207,6 +211,17 @@ def file_for(e, key):
         return str(Path('Filmes') / (clean_name(label) + '-' + key[:10] + '.strm'))
     if e['kind'] == 'episode' and e['season'] is not None and e['episode'] is not None:
         season, episode = int(e['season']), int(e['episode'])
+        # A série já tem pasta? Usa a mesma (fontes de grafias diferentes não abrem uma segunda série no Jellyfin)
+        try:
+            with connect() as c:
+                row = c.execute("SELECT relative_path FROM managed WHERE kind='episode' AND content_key LIKE ? LIMIT 1",
+                                ('episode:' + norm(e['title']).replace('%', '').replace('_', '') + ':%',)).fetchone()
+            if row:
+                parts = Path(row['relative_path']).parts
+                if len(parts) >= 3 and parts[0] == 'Series':
+                    title = parts[1]
+        except sqlite3.Error:
+            pass
         return str(Path('Series') / title / f'Season {season:02}' / f'{title} S{season:02}E{episode:02}-{key[:10]}.strm')
     raise ValueError('O item não é filme nem episódio identificado')
 
@@ -309,6 +324,76 @@ def current_entry(row):
     return None
 
 
+MAX_REPLACEMENT_TRIES = max(1, min(30, int(os.environ.get('INDEXER_REPLACEMENT_TRIES', '12'))))
+
+
+def source_rank(url):
+    """Quão fácil é a fonte para o Jellyfin: 0 arquivo de vídeo, 1 HLS padrão (.m3u8), 2 o resto
+    (HLS sem .m3u8 e afins, que o ffmpeg novo só abre com a ajuda do /play)."""
+    path = urlsplit(url or '').path.lower()
+    if path.endswith(('.mp4', '.mkv', '.m4v', '.avi', '.mov', '.webm')):
+        return 0
+    if path.endswith(('.m3u8', '.m3u')):
+        return 1
+    return 2
+
+
+def _replacement_candidates(row, bad_url=None):
+    """Outras entradas do catálogo com o mesmo conteúdo (mesmo filme/ano ou mesmo episódio), em qualquer lista."""
+    content = row['content_key'] or from_managed(row)
+    if not content:
+        return []
+    parts = content.split(':')
+    try:
+        with sqlite3.connect(f'file:{DB}?mode=ro', uri=True, timeout=12) as c:
+            c.row_factory = sqlite3.Row
+            if parts[0] == 'episode' and len(parts) >= 4:
+                name = ':'.join(parts[1:-2])
+                rows = c.execute('SELECT * FROM entries WHERE kind=? AND normalized=? AND season=? AND episode=? LIMIT 200',
+                                 ('episode', name, int(parts[-2]), int(parts[-1]))).fetchall()
+            elif parts[0] == 'movie' and len(parts) >= 3:
+                name = ':'.join(parts[1:-1])
+                rows = c.execute('SELECT * FROM entries WHERE kind=? AND normalized=? LIMIT 200', ('movie', name)).fetchall()
+            else:
+                return []
+    except sqlite3.Error:
+        return []
+    try:
+        import content_filter
+        cfg = content_filter.load()
+    except Exception:
+        content_filter, cfg = None, None
+    bad_host = (urlsplit(bad_url).hostname or '') if bad_url else ''
+    seen, out = set(), []
+    for r in rows:
+        e = dict(r)
+        if e['media_url'] == bad_url or e['media_url'] in seen:
+            continue
+        if not compatible(key_for(e['kind'], e['title'], e.get('year'), e.get('season'), e.get('episode')), content):
+            continue
+        if cfg is not None and content_filter.is_blocked(e.get('category') or '', cfg):
+            continue        # nunca troca para uma categoria bloqueada no filtro de conteúdo
+        seen.add(e['media_url'])
+        out.append(e)
+    # primeiro as de outro servidor (se um caiu, o mesmo servidor costuma estar fora também), depois a mesma lista
+    # mais fáceis para o Jellyfin primeiro (vídeo > .m3u8 > resto); depois, outro servidor antes do que caiu
+    out.sort(key=lambda e: (source_rank(e['media_url']), (urlsplit(e['media_url']).hostname or '') == bad_host,
+                            e['source'] != row['source']))
+    return out[:MAX_REPLACEMENT_TRIES]
+
+
+def _find_replacement(row, bad_url=None, better_than=None):
+    """Testa as outras fontes do mesmo conteúdo e devolve a primeira que funcionar: (entrada, motivo).
+    better_than: só considera fontes mais fáceis para o Jellyfin que esse nível (ver source_rank)."""
+    for cand in _replacement_candidates(row, bad_url):
+        if better_than is not None and source_rank(cand['media_url']) >= better_than:
+            continue
+        good, reason = validate_media(cand['media_url'])
+        if good:
+            return cand, reason
+    return None
+
+
 def recheck(key):
     with LOCK:
         with connect() as c:
@@ -317,6 +402,31 @@ def recheck(key):
             raise ValueError('Conteúdo não gerenciado')
         e = current_entry(row)
         good, reason = validate_media(e['media_url']) if e else (False, 'Entrada não encontrada após reimportação')
+        replaced = None
+        if good and e and source_rank(e['media_url']) == 2:
+            # Funciona, mas é uma fonte difícil para o Jellyfin (HLS fora do padrão): se houver uma mais
+            # fácil (arquivo de vídeo ou .m3u8) funcionando, troca por ela.
+            found = _find_replacement(row, e['media_url'], better_than=2)
+            if found:
+                new, new_reason = found
+                replaced = (row['source'], new['source'], 'fonte mais compatível com o Jellyfin')
+                with connect() as c:
+                    c.execute('UPDATE managed SET entry_id=?, identity=?, source=?, original_title=? WHERE key=?',
+                              (new['id'], identity(new), new['source'], new['original_title'], key))
+                    row = c.execute('SELECT * FROM managed WHERE key=?', (key,)).fetchone()
+                reason = 'Fonte trocada · ' + new_reason
+        if not good:
+            # Fonte fora do ar (ou sumiu da lista): procura o mesmo conteúdo em outra fonte e troca na hora.
+            # O STRM aponta para /play/<chave>, então o Jellyfin nem percebe a troca.
+            found = _find_replacement(row, e['media_url'] if e else None)
+            if found:
+                new, new_reason = found
+                replaced = (row['source'], new['source'], reason)
+                with connect() as c:
+                    c.execute('UPDATE managed SET entry_id=?, identity=?, source=?, original_title=? WHERE key=?',
+                              (new['id'], identity(new), new['source'], new['original_title'], key))
+                    row = c.execute('SELECT * FROM managed WHERE key=?', (key,)).fetchone()
+                good, reason = True, 'Fonte trocada · ' + new_reason
         failures = 0 if good else row['failures'] + 1
         next_status = 'active' if good else ('quarantined' if failures >= FAIL_LIMIT else row['status'])
         target = safe_dest(row['relative_path'])
@@ -343,12 +453,17 @@ def recheck(key):
                 if quarantine.with_suffix('.nfo').exists():
                     shutil.move(str(quarantine.with_suffix('.nfo')), str(target.with_suffix('.nfo')))
                 record_alert(c, row, 'restored', 'Fonte recuperada; STRM restaurado na pasta gerenciada')
+            if replaced:
+                old, new, why = replaced
+                record_alert(c, row, 'replaced', f'Fonte trocada automaticamente ({why}): {old or "lista"} → {new or "lista"}')
             c.execute('''UPDATE managed SET status=?, failures=?, last_error=?, validated_at=?, checked_at=?, next_check=?
                          WHERE key=?''', (next_status, failures, None if good else reason, utc_now() if good else row['validated_at'],
                                         time.time(), time.time()+CHECK_INTERVAL, key))
         if event:
             send_notification(event, row['title'], 'Fonte indisponível: STRM colocado em quarentena' if event == 'unavailable' else 'Fonte recuperada: STRM restaurado')
-        return {'key': key, 'ok': good, 'status': next_status, 'failures': failures,
+        if replaced:
+            send_notification('replaced', row['title'], f'Fonte trocada automaticamente: {replaced[0]} → {replaced[1]}')
+        return {'key': key, 'ok': good, 'status': next_status, 'failures': failures, 'replaced': bool(replaced),
                 'required_failures': FAIL_LIMIT, 'reason': reason}
 
 
@@ -359,6 +474,113 @@ def get_play_url(key):
         return None
     e = current_entry(row)
     return e['media_url'] if e else None
+
+
+# ------------------------------------------------------------------ /play para fontes HLS
+# O ffmpeg novo (Jellyfin 10.11+, ffmpeg 7.1/8.x) recusa abrir HLS quando o endereço não termina em .m3u8
+# e o servidor não manda o tipo certo ("Not detecting m3u8/hls with non standard extension and non
+# standard mime type"), e também recusa pedaços com extensão fora do padrão. Para essas fontes o
+# /play entrega a lista com o tipo certo; os pedaços com extensão comum seguem direto para o provedor
+# e os demais passam pelo indexador com nome .ts. Filmes .mp4/.mkv continuam só redirecionando.
+PLAYER_UA = 'VLC/3.0.20 LibVLC/3.0.20'
+SEGMENT_OK = ('.ts', '.m4s', '.mp4', '.m4v', '.m4a', '.aac', '.mp3', '.ac3', '.ec3', '.vtt', '.webvtt',
+              '.m2t', '.m2ts', '.mts', '.cmfv', '.cmfa', '.fmp4', '.mpegts')
+HLS_TYPE = 'application/vnd.apple.mpegurl'
+_URI_ATTR = re.compile(r'URI="([^"]+)"')
+
+
+def _open_media(url, timeout=20):
+    _public_host(url)
+    return OPENER.open(Request(url, headers={'User-Agent': PLAYER_UA, 'Accept': '*/*'}), timeout=timeout)
+
+
+def _rewrite_hls(text, base, key):
+    """Endereços da lista: absolutos; sublistas e pedaços fora do padrão passam pelo /play desta chave."""
+    from urllib.parse import quote
+
+    def fix(ref, is_playlist):
+        absolute = urljoin(base, ref)
+        path = urlsplit(absolute).path.lower()
+        if is_playlist or path.endswith(('.m3u8', '.m3u')):
+            return f'/play/{key}/p.m3u8?u=' + quote(absolute, safe='')
+        if path.endswith(SEGMENT_OK):
+            return absolute
+        return f'/play/{key}/s.ts?u=' + quote(absolute, safe='')
+
+    out, next_is_playlist = [], False
+    for line in text.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        if s.startswith('#'):
+            if s.startswith('#EXT-X-STREAM-INF'):
+                next_is_playlist = True
+            if 'URI="' in s:
+                is_pl = s.startswith(('#EXT-X-MEDIA', '#EXT-X-I-FRAME-STREAM-INF'))
+                line = _URI_ATTR.sub(lambda m: 'URI="' + fix(m.group(1), is_pl) + '"', line)
+            out.append(line)
+            continue
+        out.append(fix(s, next_is_playlist))
+        next_is_playlist = False
+    return '\n'.join(out) + '\n'
+
+
+def serve_play(handler, rest, query):
+    """Atende /play/<chave>[/p.m3u8|/s.ts]. Retorna False se a chave não existir/ativa."""
+    from urllib.parse import parse_qs
+    key, _, sub = rest.partition('/')
+    url = get_play_url(key)
+    if not url:
+        return False
+    target = parse_qs(query).get('u', [''])[0] if sub else url
+    if sub not in ('', 'p.m3u8', 's.ts') or not target:
+        return False
+    try:
+        if sub == 's.ts':                                   # pedaço com extensão fora do padrão
+            with _open_media(target, 30) as r:
+                handler.send_response(200)
+                handler.send_header('Content-Type', 'video/mp2t')
+                length = r.headers.get('Content-Length')
+                if length and length.isdigit():
+                    handler.send_header('Content-Length', length)
+                handler.end_headers()
+                while True:
+                    chunk = r.read(64 * 1024)
+                    if not chunk:
+                        break
+                    handler.wfile.write(chunk)
+            return True
+        if sub == '' and urlsplit(url).path.lower().endswith(VIDEO_FILE_EXT):
+            handler.send_redirect(url)                      # arquivo de vídeo: direto (mantém avanço/recuo)
+            return True
+        with _open_media(target) as r:
+            final = r.geturl()
+            ctype = (r.headers.get('Content-Type') or '').split(';')[0].strip().lower()
+            first = r.read(7)
+            if not (first.startswith(b'#EXTM3U') or 'mpegurl' in ctype):
+                if sub:
+                    raise ValueError('A sublista não é HLS')
+                handler.send_redirect(url)                  # não é HLS: comportamento de antes
+                return True
+            text = (first + r.read(4 * 1024 * 1024)).decode('utf-8', errors='replace')
+        data = _rewrite_hls(text, final, key).encode()
+        handler.send_response(200)
+        handler.send_header('Content-Type', HLS_TYPE)
+        handler.send_header('Content-Length', str(len(data)))
+        handler.send_header('Cache-Control', 'no-store')
+        handler.end_headers()
+        handler.wfile.write(data)
+    except (BrokenPipeError, ConnectionResetError):
+        pass
+    except (HTTPError, URLError, ValueError, OSError, TimeoutError) as exc:
+        if sub == '':
+            handler.send_redirect(url)                      # na dúvida, devolve o comportamento antigo
+        else:
+            handler.send_json(502, {'error': 'Fonte não respondeu: ' + type(exc).__name__})
+    return True
+
+
+VIDEO_FILE_EXT = ('.mp4', '.mkv', '.avi', '.mov', '.m4v', '.webm', '.wmv', '.mpg', '.mpeg', '.flv')
 
 
 def make_preview(entry_id):

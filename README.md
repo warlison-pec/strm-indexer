@@ -81,6 +81,18 @@ A aba **Canais** funciona como o "Channels" do Dispatcharr:
 
 A seleção fica em `data/channels.sqlite`, com cópia dos dados de cada canal, e os logos ficam guardados em `data/channel_logos/`.
 
+### Contas Xtream: HLS no lugar de .ts
+
+Em contas Xtream (links `http://servidor/usuario/senha/123` ou `/live/usuario/senha/123.ts`), o `.ts` ao vivo
+costuma ser cortado pelo servidor a cada poucos segundos, e o player precisa reabrir. Ao testar o canal, o indexador
+confere se a mesma conta entrega o canal em HLS (`/live/usuario/senha/123.m3u8`). Se entregar, o HLS passa a ser a
+primeira opção (na lista direta, na proxy e na de TS contínuo para o Jellyfin) e o `.ts` vira reserva.
+
+### Teste que confirma a falha
+
+Uma fonte só é dada como falha se falhar duas vezes seguidas. Se a falha for do tipo passageiro (HTTP 429, 5xx,
+tempo esgotado), um canal que já estava OK continua OK, com o aviso "Oscilou no teste".
+
 ### Lista para o Jellyfin (TS contínuo)
 
 O ffmpeg do Jellyfin lida mal com canais HLS (`.m3u8`) ao vivo: quando a lista da fonte atrasa, ele
@@ -125,3 +137,51 @@ Por segurança, fontes em endereços internos (`192.168…`, `10…`, `localhost
 ```
 INDEXER_TRUSTED_HOSTS=192.168.1.16:3001
 ```
+
+## Troca automática de fonte (filmes e episódios gerenciados)
+
+O monitor diário confere cada item da aba **Gerenciados**. Quando a fonte de um item sai do ar (ou some da lista
+depois de uma reindexação), o indexador procura o **mesmo conteúdo** no catálogo, em qualquer lista: o mesmo filme
+(nome e ano) ou o mesmo episódio (série, temporada e episódio). Ele testa as opções (primeiro as de outro servidor)
+e troca para a primeira que funcionar, na hora, sem esperar as falhas seguidas.
+
+- O STRM aponta para `/play/<chave>` do indexador, então o Jellyfin não percebe a troca: progresso e "visto" continuam.
+- Cada troca aparece nas notificações ("Fonte trocada automaticamente: lista A → lista B") e no webhook, se configurado.
+- Nunca troca para uma categoria bloqueada no filtro de conteúdo.
+- Sem nenhuma alternativa funcionando, vale a regra de antes: após `INDEXER_FAILURE_LIMIT` falhas seguidas o item vai
+  para a quarentena, e volta sozinho se alguma fonte (a antiga ou uma nova) voltar.
+- `INDEXER_REPLACEMENT_TRIES` (padrão 12) limita quantas opções são testadas por item a cada verificação.
+
+## Varredura automática de metadados
+
+Antes, capa, sinopse e o código do TMDB só eram buscados para os títulos que apareciam na tela do painel.
+Agora uma varredura em segundo plano mantém a fila de metadados abastecida mesmo sem ninguém acessar:
+
+1. primeiro os itens da aba **Gerenciados** (os que já viraram STRM);
+2. depois o catálogo inteiro, em ordem alfabética, continuando de onde parou (inclusive após reiniciar);
+3. ao chegar ao fim, espera 24 h e recomeça, pegando os títulos novos das listas.
+
+O ritmo é o do trabalhador que já existia (um item a cada `INDEXER_META_GAP_SECONDS`, padrão 12 s), com no máximo
+40 itens esperando na fila, para não esbarrar nos limites do TMDB/TVDB. Categorias bloqueadas no filtro de conteúdo
+ficam de fora.
+
+- `INDEXER_META_SCAN=0` desliga a varredura (volta ao comportamento antigo).
+- `INDEXER_META_SCAN_SECONDS` (padrão 300) define de quanto em quanto tempo a fila é reabastecida.
+
+## Limpeza semanal de links mortos
+
+Uma vez por semana, de madrugada, o indexador testa uma parte dos links das listas (filmes, episódios e canais
+de TV) e exclui do catálogo e da aba Canais os que estão fora do ar.
+
+- **Só com certeza:** um link só é excluído depois de falhar em duas rodadas seguidas; erro passageiro (429, 5xx,
+  tempo esgotado) não conta. Os que falharam uma vez são conferidos primeiro na rodada seguinte.
+- **Por partes:** cada rodada testa até `INDEXER_PRUNE_MAX` links (padrão 20000), no máximo 2 conexões por servidor
+  e por até `INDEXER_PRUNE_HOURS` horas (padrão 4); a próxima continua de onde parou até cobrir tudo.
+- **Os arquivos M3U não são alterados:** as listas por link são baixadas de novo e trariam as linhas de volta. O
+  indexador guarda os links mortos (`data/link_health.sqlite`) e os ignora em toda reindexação. **Restaurar
+  excluídos** (aba Listas) desfaz.
+- **Não testa:** itens da aba Gerenciados (o monitor diário já cuida deles, inclusive trocando a fonte) e endereços
+  de `INDEXER_TRUSTED_HOSTS` (ex.: Dispatcharr na rede local).
+- Agenda: `INDEXER_PRUNE_DAY` (0 = segunda … 6 = domingo, padrão 6; `off` desliga) e `INDEXER_PRUNE_HOUR`
+  (padrão 3). O horário segue o fuso do contêiner (defina `TZ=America/Sao_Paulo` no compose).
+

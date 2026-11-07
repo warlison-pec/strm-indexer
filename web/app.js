@@ -136,7 +136,7 @@ const post = (path, body = {}) => api(path, { method: 'POST', body });
 /* ============================== Estado ============================== */
 const LIMIT = 24;
 const state = {
-  view: 'movie', page: 1, q: '', category: '', source: '', total: 0,
+  view: 'movie', page: 1, q: '', category: '', source: '', total: 0, sort: localStorage.getItem('sbSort') || 'recent',
   filters: null, stats: null, noCatalog: false, seq: 0, heroType: null,
   managed: null, managedFilter: 'all', managedQuery: ''
 };
@@ -488,6 +488,8 @@ async function chLoadSelected() {
   try {
     const r = await api('/channels/selected');
     ch.sel = r.items; ch.token = r.token; ch.settings = r.settings; ch.epg = r.epg;
+    const ao = r.settings.auto_organize || '';
+    $('chOrgAuto').checked = !!ao; if (ao) $('chOrgNum').value = ao;
     renderSelected(); renderAvail(); renderOutput(); chTestProgress(r.test);
   } catch (e) { toast(e.message, 'bad'); }
 }
@@ -669,6 +671,19 @@ $('chSelShow').addEventListener('click', e => {
 $('chTestAll').addEventListener('click', async () => { await post('/channels/test', {}).catch(e => toast(e.message, 'bad')); chWatchTest(); });
 $('chTestNew').addEventListener('click', async () => { await post('/channels/test', { only_untested: true }).catch(e => toast(e.message, 'bad')); chWatchTest(); });
 $('chRenumber').addEventListener('click', async () => { await post('/channels/renumber', { start: 1 }).catch(e => toast(e.message, 'bad')); chLoadSelected(); });
+$('chOrganize').addEventListener('click', () => $('chOrgBox').classList.toggle('hidden'));
+$('chOrgClose').addEventListener('click', () => $('chOrgBox').classList.add('hidden'));
+$('chOrgGo').addEventListener('click', () => busy($('chOrgGo'), async () => {
+  try {
+    const mode = $('chOrgNum').value;
+    const r = await post('/channels/organize', { numbering: mode });
+    if ($('chOrgAuto').checked) await post('/channels/auto-organize', { mode });
+    else await post('/channels/auto-organize', { mode: '' });
+    $('chOrgResult').textContent = 'Organizado: ' + r.categories.map(c => `${c.name} (${c.count})`).join(' · ');
+    toast('Canais organizados por categoria', 'ok');
+    chLoadSelected();
+  } catch (e) { toast('Erro: ' + e.message, 'bad'); }
+}));
 $('chDropFailed').addEventListener('click', async () => {
   try { const r = await post('/channels/remove', { failed: true }); toast(`${fmt(r.removed)} canal(is) removido(s)`, 'ok'); chLoadSelected(); } catch (e) { toast(e.message, 'bad'); }
 });
@@ -770,7 +785,7 @@ async function browse({ silent = false } = {}) {
   }
   try {
     const data = await api('/browse', {
-      params: { type: state.view, q: state.q, category: state.category, source: state.source, page: state.page, limit: LIMIT }
+      params: { type: state.view, q: state.q, category: state.category, source: state.source, page: state.page, limit: LIMIT, sort: state.sort }
     });
     if (seq !== state.seq) return;
     state.total = data.total;
@@ -804,7 +819,9 @@ function card(it, i) {
     p.append(h('span', { class: 'tag ok' }, icon('check'), fmt(it.managed_count) + ' ep.'));
   }
   if (it.source_count > 1) p.append(h('span', { class: 'tag right', text: it.source_count + ' listas' }));
-  const year = meta.year || it.year;
+  const rating = it.rating ?? meta.rating;
+  if (rating > 0) p.append(h('span', { class: 'tag rate', text: '★ ' + Number(rating).toFixed(1) }));
+  const year = meta.year || it.year || it.yr;
   const sub = movie
     ? [year || 'Ano —', fmt(it.entries) + (it.entries === 1 ? ' fonte' : ' fontes')]
     : [it.seasons + (it.seasons === 1 ? ' temporada' : ' temporadas'), fmt(it.entries) + ' ep.'];
@@ -875,6 +892,12 @@ $('search').addEventListener('input', e => {
   }, 280);
 });
 $('source').addEventListener('change', e => { state.source = e.target.value; state.page = 1; renderCatalogChrome(); browse(); });
+$('sort').value = state.sort;
+$('sort').addEventListener('change', e => {
+  state.sort = e.target.value; state.page = 1;
+  try { localStorage.setItem('sbSort', state.sort); } catch { /* sem armazenamento */ }
+  browse();
+});
 $('clear').addEventListener('click', () => {
   state.q = ''; state.category = ''; state.source = ''; state.page = 1;
   $('search').value = ''; $('source').value = '';
@@ -1491,7 +1514,7 @@ function renderManaged() {
   for (const a of alerts) {
     const bad = a.event === 'unavailable';
     tl.append(h('div', { class: 'tl ' + (bad ? 'bad' : 'ok') },
-      h('span', { class: 'ico' }, icon(bad ? 'alert' : 'check')),
+      h('span', { class: 'ico' }, icon(bad ? 'alert' : a.event === 'replaced' ? 'refresh' : 'check')),
       h('div', null, h('strong', { text: a.title }), h('p', { text: a.message }), h('small', { text: new Date(a.created_at).toLocaleString('pt-BR') }))));
   }
 }
@@ -1639,7 +1662,36 @@ async function loadRequests(silent = false) {
 $('refreshRequests').addEventListener('click', e => busy(e.currentTarget, () => loadRequests()));
 
 /* ============================== Listas ============================== */
+async function loadPrune() {
+  try {
+    const d = await api('/prune/status');
+    const st = d.state || {};
+    const parts = [];
+    parts.push(d.schedule ? `Roda toda ${d.schedule}, testando até ${fmt(d.max_per_run)} links por vez.` : 'Limpeza semanal desligada (INDEXER_PRUNE_DAY=off).');
+    if (st.running) parts.push(`Rodando agora: ${fmt(st.checked)} de ${fmt(st.total)} testados.`);
+    else if (d.last_run) parts.push('Última: ' + new Date(d.last_run * 1000).toLocaleString('pt-BR') + ' · ' + (d.last_result || ''));
+    parts.push(`${fmt(d.dead)} links excluídos do catálogo · ${fmt(d.suspect)} com uma falha (serão conferidos de novo) · ${fmt(d.checked)} já testados.`);
+    $('pruneInfo').textContent = parts.join(' ');
+    $('pruneList').replaceChildren(...(d.recent || []).map(r => h('div', { class: 'prune-row' },
+      h('strong', { text: r.title || '—' }),
+      h('small', { text: [r.kind === 'live' ? 'Canal' : 'Filme/série', r.source, r.last_error].filter(Boolean).join(' · ') }))));
+    if (st.running) setTimeout(() => { if (!$('viewSources').classList.contains('hidden')) loadPrune(); }, 5000);
+  } catch (e) { $('pruneInfo').textContent = 'Não foi possível consultar a limpeza: ' + e.message; }
+}
+
+$('pruneRun').addEventListener('click', () => busy($('pruneRun'), async () => {
+  if (!await ask('Rodar a limpeza agora', 'Os links serão testados em segundo plano (pode levar horas em listas grandes). Um link só é excluído após falhar em duas rodadas.', { ok: 'Rodar' })) return;
+  try { await post('/prune/run'); toast('Limpeza iniciada', 'info'); setTimeout(loadPrune, 1500); }
+  catch (e) { toast('Erro: ' + e.message, 'bad'); }
+}));
+$('pruneRestore').addEventListener('click', () => busy($('pruneRestore'), async () => {
+  if (!await ask('Restaurar links excluídos', 'Todos os links excluídos pela limpeza voltam ao catálogo na próxima reindexação (feita agora).', { ok: 'Restaurar' })) return;
+  try { await post('/prune/restore', {}); toast('Links restaurados; reindexando', 'ok'); loadPrune(); }
+  catch (e) { toast('Erro: ' + e.message, 'bad'); }
+}));
+
 async function loadSources() {
+  loadPrune();
   const grid = $('sourceList');
   if (!grid.childElementCount) grid.replaceChildren(...[1, 2, 3].map(() => h('div', { class: 'file skeleton' }, h('div', { class: 'sk' }), h('div', { class: 'sk' }))));
   try {
@@ -1649,14 +1701,14 @@ async function loadSources() {
     const max = Math.max(1, ...counts.values());
     $('filesCount').textContent = fmt(st.files.length) + (st.files.length === 1 ? ' arquivo' : ' arquivos');
     grid.replaceChildren();
-    if (!st.files.length) grid.append(emptyState('file', 'Nenhuma lista ainda', 'Envie um arquivo ou importe do GitHub para começar.'));
+    if (!st.files.length) grid.append(emptyState('file', 'Nenhuma lista ainda', 'Envie um arquivo ou importe por link para começar.'));
     for (const f of st.files) {
       const n = counts.get(f.name);
       const bar = h('div', { class: 'bar' }, h('i'));
       bar.firstChild.style.width = (n ? Math.max(3, (n / max) * 100) : 0) + '%';
       const actions = h('div', { class: 'batch-row' });
       if (f.github) {
-        const ref = btn('Atualizar do GitHub', { cls: 'sm', ico: 'refresh' });
+        const ref = btn(f.provider ? 'Atualizar do provedor' : 'Atualizar do GitHub', { cls: 'sm', ico: 'refresh' });
         ref.addEventListener('click', () => busy(ref, () => playlistAction(() => post('/playlists/refresh', { filename: f.name }), 'Lista atualizada')));
         actions.append(ref);
       }
@@ -1672,7 +1724,7 @@ async function loadSources() {
       card.append(
         h('div', { class: 'file-top' }, h('span', { class: 'file-ico' }, icon(f.github ? 'github' : 'file')),
           h('div', { class: 'file-name' }, h('strong', { text: f.name, title: f.name }), h('small', { text: bytes(f.size) + (f.url ? ' · ' + f.url.replace(/^https:\/\/raw\.githubusercontent\.com\//, '') : ''), title: f.url || '' }))),
-        h('div', { class: 'file-stats' }, pill(n !== undefined ? fmt(n) + ' entradas' : 'não indexada', n !== undefined ? 'info' : 'warn'), pill(f.github ? 'GitHub' : 'Upload local', 'plain')),
+        h('div', { class: 'file-stats' }, pill(n !== undefined ? fmt(n) + ' entradas' : 'não indexada', n !== undefined ? 'info' : 'warn'), pill(f.provider ? 'Link do provedor' : f.github ? 'GitHub' : 'Upload local', 'plain')),
         bar, actions);
       grid.append(card);
     }
@@ -1684,12 +1736,12 @@ function editPlaylist(card, f) {
   if (card.querySelector('.file-edit')) return;
   const ext = f.name.match(/\.m3u8?$/i)?.[0] || '.m3u';
   const name = h('input', { value: f.name.slice(0, -ext.length), placeholder: 'Nome da lista', attrs: { 'aria-label': 'Nome da lista' } });
-  const url = f.github ? h('input', { type: 'url', value: f.url || '', placeholder: 'Link raw do GitHub', attrs: { 'aria-label': 'Link do GitHub' } }) : null;
+  const url = f.github ? h('input', { type: 'url', value: f.url || '', placeholder: 'Link da lista', attrs: { 'aria-label': 'Link da lista' } }) : null;
   const save = btn('Salvar', { cls: 'sm primary', ico: 'check' });
   const cancel = btn('Cancelar', { cls: 'sm ghost' });
   const form = h('div', { class: 'file-edit' },
     h('label', {}, h('span', { text: 'Nome' }), h('span', { class: 'file-edit-name' }, name, h('em', { text: ext }))),
-    url ? h('label', {}, h('span', { text: 'Link do GitHub' }), url) : null,
+    url ? h('label', {}, h('span', { text: f.provider ? 'Link do provedor (a senha aparece como ••••; deixe assim para manter)' : 'Link do GitHub' }), url) : null,
     h('div', { class: 'batch-row' }, save, cancel));
   card.append(form); name.focus(); name.select();
   cancel.addEventListener('click', () => form.remove());
@@ -1773,7 +1825,7 @@ dz.addEventListener('drop', e => handleFile(e.dataTransfer.files[0]));
 $('githubForm').addEventListener('submit', e => {
   e.preventDefault();
   const b = $('addGithub');
-  busy(b, () => playlistAction(() => post('/playlists/github', { url: $('githubPlaylist').value.trim() }), 'Lista do GitHub adicionada'))
+  busy(b, () => playlistAction(() => post('/playlists/github', { url: $('githubPlaylist').value.trim() }), 'Lista adicionada'))
     .then(() => { $('githubPlaylist').value = ''; });
 });
 $('reindexPlaylists').addEventListener('click', async () => {

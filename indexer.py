@@ -21,11 +21,35 @@ YEAR = re.compile(r'(?<!\d)(?:19|20)\d{2}(?!\d)')
 EXTINF_ATTR = re.compile(r'([\w-]+)="([^"]*)"')
 
 
+# Marcas que as listas penduram no nome e que separavam o mesmo título em vários cards
+# ("Boruto … LEG", "Boruto … (L)", "… Dublado", "… FHD"). O nome original de cada fonte continua guardado.
+TAG_PAREN = re.compile(r'\((?:l|d|leg|dub|legendad[oa]|dublad[oa]|dual|nacional|pt-?br)\)')
+TAG_TAIL = re.compile(r'(?:\s+(?:leg|legendad[oa]|dub|dublad[oa]|dual audio|dual|audio|nacional|ptbr|pt br|hd|fhd|uhd|4k|1080p|720p))+$')
+
+
 def norm(s):
     s = unicodedata.normalize('NFKD', s or '')
     s = ''.join(c for c in s if not unicodedata.combining(c)).casefold()
     s = re.sub(r'\[[^\]]{0,70}\]', ' ', s)
-    return re.sub(r'[^a-z0-9]+', ' ', s).strip()
+    s = TAG_PAREN.sub(' ', s)
+    s = re.sub(r'[^a-z0-9]+', ' ', s).strip()
+    t = TAG_TAIL.sub('', s).strip()
+    return t or s
+
+
+_TAG_WORDS = r'(?:leg|legendad[oa]|dub|dublad[oa]|dual(?: [aá]udio)?|nacional|pt-?br|hd|fhd|uhd|4k|1080p|720p)'
+
+
+def clean_title(s):
+    """Nome para exibir/pastas sem as marcas de idioma e qualidade ("… LEG", "… (L)", "… [Dublado]")."""
+    t = re.sub(r'\s*\((?:l|d|leg|dub|legendad[oa]|dublad[oa]|dual|nacional|pt-?br)\)', ' ', s or '', flags=re.I)
+    t = re.sub(r'\s*\[[^\]]{0,70}\]', ' ', t)
+    prev = None
+    while prev != t:
+        prev = t
+        t = re.sub(r'[\s\-–:]+' + _TAG_WORDS + r'\s*$', '', t.strip(), flags=re.I)
+    t = re.sub(r'\s+', ' ', t).strip(' -._:')
+    return t or (s or '').strip()
 
 
 def parse_title(s, category):
@@ -33,13 +57,38 @@ def parse_title(s, category):
     if ep:
         series = s[:ep.start()].strip(' -._')
         series = re.sub(r'\s*[\[(](?:19|20)\d{2}[\])]\s*$', '', series).strip()
+        series = clean_title(series)
+        series = re.sub(r'\s*[\[(](?:19|20)\d{2}[\])]\s*$', '', series).strip()
         years = YEAR.findall(s[:ep.start()])
+        # ano solto no fim do nome da série ("Boruto … 2017"): fica só no campo ano
+        loose = re.sub(r'[\s\-:]+(?:19|20)\d{2}$', '', series).strip(' -._:')
+        if len(norm(loose)) >= 3 and not loose.isdigit():
+            series = loose
         return 'episode', series or s, norm(series or s), int(years[-1]) if years else None, int(ep[1]), int(ep[2])
     kind = 'movie' if category.upper().startswith('FILMES') else ('unknown' if not category else 'other')
     years = YEAR.findall(s)
     title = re.sub(r'[\[(]\s*(?:19|20)\d{2}\s*[\])]', ' ', s) if kind == 'movie' else s
     title = re.sub(r'\[[^\]]{0,70}\]', ' ', title)
     title = re.sub(r'\s+', ' ', title).strip(' -._')
+    if kind == 'movie':
+        title = clean_title(title)
+        # Ano solto no fim ("Matrix 1999"): sai do nome se for um ano possível e for o único ano do
+        # título ou igual ao ano entre parênteses. "Blade Runner 2049 (2017)" e "1917" ficam como estão.
+        m = re.search(r'[\s\-:]+((?:19|20)\d{2})$', title)
+        if m:
+            loose = int(m.group(1))
+            paren = [int(y) for y in re.findall(r'[\[(]\s*((?:19|20)\d{2})\s*[\])]', s)]
+            rest = title[:m.start()].strip(' -._:')
+            if (loose <= datetime.now().year + 1 and len(norm(rest)) >= 2
+                    and ((not paren and len(years) == 1) or loose in paren)):
+                title = rest
+        # Ano do filme: o entre parênteses; senão um ano que não faça parte do próprio título
+        # ("Blade Runner 2049" e "1917" não têm ano informado).
+        paren = [int(y) for y in re.findall(r'[\[(]\s*((?:19|20)\d{2})\s*[\])]', s)]
+        if paren:
+            years = [str(paren[-1])]
+        else:
+            years = [y for y in years if y not in YEAR.findall(title)]
     return kind, title or s, norm(title or s), int(years[-1]) if years else None, None, None
 
 
@@ -67,6 +116,17 @@ def iter_entries(path):
                 yield title0, attrs0.get('group-title', ''), url
 
 
+_LIVE_URL = re.compile(r'/(?:live|proxy|channels?|stream)/|^/[^/]+/[^/]+/\d+(?:\.ts)?$', re.I)
+
+
+def _live_url(url):
+    """Endereço de transmissão ao vivo (não é arquivo de filme)."""
+    path = urlsplit(url).path
+    if path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.m4v', '.webm')) or '/movie/' in path.lower():
+        return False
+    return bool(_LIVE_URL.search(path))
+
+
 def build():
     if not PLAYLISTS.is_dir():
         raise SystemExit(f'Pasta de listas inexistente: {PLAYLISTS}')
@@ -91,10 +151,22 @@ def build():
             CREATE TABLE info (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         ''')
         batch = []
+        try:
+            import link_pruner
+            dead = link_pruner.dead_urls()
+        except Exception:
+            dead = frozenset()
         for order, path in enumerate(sources):
             count = 0
+            if not path.is_file():
+                print(f'{path.name}: removida/renomeada durante a indexação; ignorada')
+                continue
             for display, cat, url in iter_entries(path):
+                if url in dead:
+                    continue                # link morto confirmado pela limpeza semanal
                 kind, title, normal, year, season, episode = parse_title(display, cat)
+                if kind == 'movie' and _live_url(url):
+                    kind = 'other'          # canal ao vivo num grupo "Filmes…" (HBO, Telecine…): não é filme
                 batch.append((path.name, order, display, title, normal, cat, kind, year, season, episode, urlsplit(url).hostname, url))
                 stats[kind] += 1
                 count += 1
@@ -110,6 +182,14 @@ def build():
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''', batch)
         conn.executescript('''
             CREATE INDEX idx_search ON entries(normalized, kind, year, season, episode);
+            -- Filme sem ano numa lista e com ano em outra ("Matrix" e "Matrix (1999)"): completa o ano quando
+            -- o título tem UM único ano conhecido no catálogo (com anos diferentes, ex. refilmagem, não mexe).
+            UPDATE entries SET year = (
+                SELECT MIN(o.year) FROM entries o
+                WHERE o.kind='movie' AND o.normalized=entries.normalized AND o.year IS NOT NULL)
+            WHERE kind='movie' AND year IS NULL AND (
+                SELECT COUNT(DISTINCT o.year) FROM entries o
+                WHERE o.kind='movie' AND o.normalized=entries.normalized AND o.year IS NOT NULL) = 1;
             CREATE INDEX idx_group ON entries(kind, normalized, season, episode);
             CREATE INDEX idx_source ON entries(source);
         ''')

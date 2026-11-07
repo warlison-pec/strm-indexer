@@ -92,7 +92,7 @@ def connect():
             detail TEXT NOT NULL DEFAULT '', checked_at REAL, PRIMARY KEY(channel_id, id));
     ''')
     cols = {r['name'] for r in c.execute('PRAGMA table_info(selected)')}
-    for col in ('ua', 'referer'):
+    for col in ('ua', 'referer', 'hls'):
         if col not in cols:
             c.execute(f"ALTER TABLE selected ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
     return c
@@ -117,17 +117,32 @@ def token():
 
 
 # ------------------------------------------------------------------ índice das listas
-def _is_live(title, group, url):
-    kind = parse_title(title, group or '')[0]
-    if kind in ('movie', 'episode'):
-        return False
+# Endereços típicos de transmissão ao vivo (Dispatcharr /proxy/, Xtream /live/, painéis /play/…)
+LIVE_PATH = re.compile(r'/(?:live|proxy|channels?|stream)/', re.I)
+
+
+def _is_live(title, group, url, attrs=None):
     path = urlsplit(url).path.lower()
-    return not path.endswith(VOD_EXT)
+    if path.endswith(VOD_EXT) or '/movie/' in path or '/series/' in path:
+        return False                                    # arquivo de filme/episódio
+    kind = parse_title(title, group or '')[0]
+    if kind == 'episode':
+        return False
+    if kind == 'movie':
+        # Grupo "Filmes…" também é usado para CANAIS (HBO, Telecine, AXN no Dispatcharr, por exemplo):
+        # entra como canal quando há sinal claro de ao vivo (número de canal, caminho de live, formato Xtream).
+        return bool((attrs or {}).get('tvg-chno')) or bool(LIVE_PATH.search(path)) or bool(XTREAM_LIVE.match(url))
+    return True
 
 
 def _scan():
     files = sorted(p for p in PLAYLISTS.iterdir() if p.is_file() and p.suffix.lower() in SUPPORTED) if PLAYLISTS.is_dir() else []
-    sig = tuple((p.name, p.stat().st_mtime, p.stat().st_size) for p in files)
+    try:
+        import link_pruner
+        dead = link_pruner.dead_urls()
+    except Exception:
+        dead = frozenset()
+    sig = tuple((p.name, p.stat().st_mtime, p.stat().st_size) for p in files) + (len(dead),)
     if sig == _index['sig']:
         return
     items, seen = [], set()
@@ -174,7 +189,7 @@ def _scan():
                     if parts.scheme not in ('http', 'https') or not parts.hostname:
                         continue
                     group = a.get('group-title', '').strip()
-                    if not _is_live(name, group, url):
+                    if not _is_live(name, group, url, a) or url in dead:
                         continue
                     cid = hashlib.sha1(url.encode()).hexdigest()[:16]
                     if cid in seen:
@@ -242,7 +257,8 @@ def selected():
     with connect() as c:
         rows = [dict(r) for r in c.execute('SELECT * FROM selected ORDER BY position, added_at')]
         settings = {'epg_url': _setting(c, 'epg_url'), 'only_ok': _setting(c, 'only_ok', '1') == '1',
-                    'link_base': _setting(c, 'link_base'), 'stream_mode': _setting(c, 'stream_mode', 'auto')}
+                    'link_base': _setting(c, 'link_base'), 'stream_mode': _setting(c, 'stream_mode', 'auto'),
+                    'auto_organize': _setting(c, 'auto_organize', '')}
         alts = {r['channel_id']: (r['n'], r['ok'] or 0) for r in c.execute(
             "SELECT channel_id, COUNT(*) n, SUM(status='ok') ok FROM alternates GROUP BY channel_id")}
     import epg
@@ -285,6 +301,9 @@ def add(ids=None, q='', group='', source=''):
     if added:
         import epg
         epg.auto_match()
+        mode = auto_organize_mode()
+        if mode:
+            organize(mode)          # organização automática ligada: o canal novo já vai para a sua categoria
     return {'added': added, 'limit_reached': count + added >= MAX_SELECTED}
 
 
@@ -326,6 +345,98 @@ def update(cid, name=None, group=None, number=None):
     import epg
     epg.state['dirty'] = True
     return {'ok': True}
+
+
+# ------------------------------------------------------------------ organização automática por categoria
+# Ordem das categorias, início do bloco de números (como na TV a cabo), palavras do GRUPO da lista e do NOME.
+CATEGORIES = [
+    ('Abertos', 1,
+     r'abert|nacionais|regionais|locais|\bgeneral\b|variedades|entertainment',
+     r'\b(globo|sbt|record|band|bandeirantes|rede ?tv|cultura|tv brasil|gazeta|cnt|rede ?vida|tv aparecida|'
+     r'tv camara|tv senado|tv justi|canal sete|chroma|futura)\b(?!.*news)'),
+    ('Notícias', 100, r'not[ií]cia|\bnews\b|jornal|jornalismo',
+     r'news|cnn|bandnews|globonews|jovem pan|record news|sbt news|cnbc|bloomberg|euronews|dw\b|bbc world|al jazeera'),
+    ('Esportes', 200, r'esporte|sport|futebol|football|soccer|\bufc\b|luta|combate|premiere',
+     r'espn|sportv|premiere|combate|band ?sports|fox sports|tnt sports|dazn|eleven|goat|cazé|caze|nba|nfl|xsports|sport'),
+    ('Filmes e Séries', 300, r'filme|s[eé]rie|movie|cinema|\btelecine\b|\bhbo\b',
+     r'hbo|telecine|cinemax|megapix|\btnt\b|\baxn\b|warner|sony|universal|paramount|space|\bfx\b|studio|'
+     r'star channel|amc|film|cine|runtime|a&e|\bae\b|lifetime|tcm|prime ?box'),
+    ('Infantil', 400, r'kid|infantil|crian[cç]a|anima[cç]|cartoon|desenho|anime',
+     r'cartoon|disney|nick|gloob|discovery kids|boomerang|baby|tooncast|zoomoo|kids|ra-tim-bum|gloobinho|otaku|anime'),
+    ('Documentários', 500, r'document|educa|ci[eê]ncia|natureza|hist[oó]ri|cultura',
+     r'discovery|history|nat ?geo|national geographic|animal planet|curiosity|smithsonian|tlc|h2\b|science'),
+    ('Música', 600, r'm[uú]sic|music|\bclipes?\b|r[aá]dio',
+     r'mtv|music|vh1|bis\b|multishow|clubbing|trace|kiss|hits'),
+    ('Religiosos', 700, r'relig|gospel|cat[oó]lic|evang|crist[aã]o',
+     r'can[cç][aã]o nova|aparecida|rede vida|gospel|novo tempo|rit\b|boa vontade|evang|igreja|catol'),
+]
+OTHER = ('Outros', 800)
+_CAT_RX = [(n, b, re.compile(g, re.I), re.compile(nm, re.I)) for n, b, g, nm in CATEGORIES]
+
+
+def classify(name, group=''):
+    """Categoria padrão do canal: primeiro pelo grupo da lista, depois pelo nome."""
+    g, n = group or '', name or ''
+    for cat, _, _, _ in _CAT_RX:                     # já organizado antes: mantém
+        if g.strip().lower() == cat.lower():
+            return cat
+    for cat, _, grx, nrx in _CAT_RX:
+        if grx.search(g) and not (cat == 'Abertos' and _CAT_RX[1][3].search(n)):
+            return cat
+    # pelo nome: categorias específicas antes de "Abertos" ("Band Sports" é esporte, não a Band)
+    for cat, _, _, nrx in _CAT_RX[1:] + _CAT_RX[:1]:
+        if nrx.search(n):
+            return cat
+    return OTHER[0]
+
+
+def _block(cat):
+    return next((b for n, b, _, _ in _CAT_RX if n == cat), OTHER[1])
+
+
+def organize(numbering='seq'):
+    """Classifica os canais da lista, agrupa por categoria (mantendo a ordem dentro de cada uma) e renumera.
+    numbering: 'seq' (1, 2, 3…), 'blocks' (Abertos 1+, Notícias 100+, Esportes 200+…) ou 'keep'."""
+    if numbering not in ('seq', 'blocks', 'keep'):
+        raise ValueError('Numeração inválida')
+    order = [n for n, _, _, _ in _CAT_RX] + [OTHER[0]]
+    with connect() as c:
+        rows = [dict(r) for r in c.execute('SELECT id, name, group_title FROM selected ORDER BY position, added_at')]
+        for r in rows:
+            r['cat'] = classify(r['name'], r['group_title'])
+        rows.sort(key=lambda r: order.index(r['cat']))          # estável: mantém a ordem dentro da categoria
+        counts, seq, inblock = {}, 0, {}
+        for pos, r in enumerate(rows, 1):
+            counts[r['cat']] = counts.get(r['cat'], 0) + 1
+            if numbering == 'seq':
+                seq += 1
+                number = seq
+            elif numbering == 'blocks':
+                inblock[r['cat']] = inblock.get(r['cat'], -1) + 1
+                number = _block(r['cat']) + inblock[r['cat']]
+            else:
+                number = None
+            if number is None:
+                c.execute('UPDATE selected SET group_title=?, position=? WHERE id=?', (r['cat'], pos, r['id']))
+            else:
+                c.execute('UPDATE selected SET group_title=?, position=?, number=? WHERE id=?', (r['cat'], pos, number, r['id']))
+        _set_setting(c, 'organize', numbering)
+    import epg
+    epg.state['dirty'] = True
+    return {'ok': True, 'categories': [{'name': k, 'count': counts[k]} for k in order if k in counts]}
+
+
+def auto_organize_mode():
+    with connect() as c:
+        return _setting(c, 'auto_organize', '')
+
+
+def set_auto_organize(mode):
+    if mode not in ('', 'seq', 'blocks', 'keep'):
+        raise ValueError('Modo inválido')
+    with connect() as c:
+        _set_setting(c, 'auto_organize', mode)
+    return {'ok': True, 'auto_organize': mode}
 
 
 def reorder(ids):
@@ -416,14 +527,32 @@ def probe(url, ua='', referer='', depth=0):
         return False, str(e)[:150] or type(e).__name__, ''
 
 
-def sources_for(cid):
-    """Fonte principal + reservas, na ordem de uso."""
+# ------------------------------------------------------------------ contas Xtream: HLS no lugar de .ts
+# Nas contas Xtream o .ts ao vivo costuma ser cortado pelo servidor a cada poucos segundos (o player
+# precisa reabrir); o HLS do mesmo canal (/live/usuario/senha/ID.m3u8) segue estável. O teste do canal
+# confere se a conta entrega o HLS e, se sim, ele passa a ser a primeira opção.
+XTREAM_LIVE = re.compile(r'^(https?://[^/?#]+)/(?:live/)?([^/?#]+)/([^/?#]+)/(\d+)(?:\.ts)?$', re.I)
+
+
+def xtream_hls(url):
+    m = XTREAM_LIVE.match((url or '').strip())
+    if not m or m.group(2).lower() in ('movie', 'series', 'play', 'hls'):
+        return None
+    return f'{m.group(1)}/live/{m.group(2)}/{m.group(3)}/{m.group(4)}.m3u8'
+
+
+def sources_for(cid, with_hls=True):
+    """Fonte principal + reservas, na ordem de uso (o HLS confirmado da conta Xtream vem primeiro)."""
     with connect() as c:
-        main = c.execute('SELECT id, url, ua, referer, status FROM selected WHERE id=?', (cid,)).fetchone()
+        main = c.execute('SELECT id, url, ua, referer, status, hls FROM selected WHERE id=?', (cid,)).fetchone()
         if not main:
             return []
         alts = c.execute('SELECT id, url, ua, referer, status FROM alternates WHERE channel_id=? ORDER BY position', (cid,)).fetchall()
-    return [dict(main)] + [dict(a) for a in alts]
+    main = dict(main)
+    out = [main] + [dict(a) for a in alts]
+    if with_hls and (main.get('hls') or '').startswith('http'):
+        out.insert(0, {**main, 'url': main['hls'], 'id': main['id'] + ':hls'})
+    return out
 
 
 # ------------------------------------------------------------------ fontes reserva
@@ -499,12 +628,40 @@ def promote_alternate(cid, alt_id):
 
 
 # ------------------------------------------------------------------ teste dos canais
+TRANSIENT = re.compile(r'HTTP (429|5\d\d)|timed out|tempo|Connection (reset|aborted|refused)|Remote end closed|temporar', re.I)
+
+
+def _probe_confirmed(url, ua, referer):
+    """Testa; se falhar, confirma uma segunda vez antes de condenar a fonte (como fazem os apps de IPTV)."""
+    ok, detail, kind = probe(url, ua, referer)
+    if ok:
+        return ok, detail, kind, False
+    time.sleep(1.5)
+    ok2, detail2, kind2 = probe(url, ua, referer)
+    if ok2:
+        return ok2, detail2 + ' (na 2ª tentativa)', kind2, False
+    # 429/5xx/tempo esgotado: o servidor oscilou, não quer dizer que a fonte morreu
+    return False, detail2, kind2, bool(TRANSIENT.search(detail2 or ''))
+
+
 def _check(row):
     """Testa a principal e as reservas; o canal funciona se alguma fonte responder."""
-    srcs = sources_for(row['id'])
+    srcs = sources_for(row['id'], with_hls=False)
     results = []
+    transient_main = False
+    hls_state = None
+    if srcs:
+        hls = xtream_hls(srcs[0]['url'])
+        if hls:
+            ok_h, det_h, kind_h = probe(hls, srcs[0]['ua'], srcs[0]['referer'])
+            hls_state = hls if ok_h and kind_h == 'hls' else 'no'
     for i, src in enumerate(srcs):
-        ok, detail, _ = probe(src['url'], src['ua'], src['referer'])
+        if i == 0 and hls_state and hls_state != 'no':
+            ok, detail, transient = True, 'HLS da conta Xtream respondeu (usado no lugar do .ts)', False
+        else:
+            ok, detail, _, transient = _probe_confirmed(src['url'], src['ua'], src['referer'])
+        if i == 0:
+            transient_main = transient
         results.append((ok, detail))
         if i:
             with connect() as c:
@@ -512,19 +669,24 @@ def _check(row):
                           ('ok' if ok else 'fail', detail[:200], time.time(), row['id'], src['id']))
     good = [i for i, (ok, _) in enumerate(results) if ok]
     ok = bool(good)
+    # oscilação do servidor (429/5xx/tempo) não derruba um canal que já estava funcionando
+    kept = not ok and transient_main and row.get('status') == 'ok'
+    if kept:
+        ok = True
     if not results:
         detail = 'Sem fonte'
     elif results[0][0]:
         detail = results[0][1]
     elif good:
         detail = f'Principal falhou ({results[0][1]}); reserva {good[0]} funcionando'
+    elif kept:
+        detail = f'Oscilou no teste ({results[0][1]}); mantido como OK'
     else:
         detail = results[0][1]
-    if good:
-        _good[row['id']] = (good[0], time.time())
+    _good.pop(row['id'], None)        # a ordem das fontes pode ter mudado (HLS da conta Xtream)
     with connect() as c:
-        c.execute('UPDATE selected SET status=?, detail=?, checked_at=? WHERE id=?',
-                  ('ok' if ok else 'fail', detail[:200], time.time(), row['id']))
+        c.execute('UPDATE selected SET status=?, detail=?, checked_at=?, hls=? WHERE id=?',
+                  ('ok' if ok else 'fail', detail[:200], time.time(), hls_state or '', row['id']))
     with _lock:
         _test['done'] += 1
         _test['ok' if ok else 'fail'] += 1
@@ -588,7 +750,20 @@ def _send_bytes(handler, data, ctype):
     handler.wfile.write(data)
 
 
+STREAM_READ_TIMEOUT = 90   # fluxo ao vivo pode ficar parado entre blocos (HLS de 10 s via Dispatcharr)
+
+
+def _stream_timeout(resp, seconds=STREAM_READ_TIMEOUT):
+    """O timeout de _open() (10-20 s) vale para conectar; num fluxo contínuo ele derrubava o canal
+    sempre que a fonte ficava alguns segundos sem mandar bytes. Aqui afrouxa só a leitura."""
+    try:
+        resp.fp.raw._sock.settimeout(seconds)
+    except AttributeError:
+        pass
+
+
 def _pipe(handler, resp, first, ctype):
+    _stream_timeout(resp)
     handler.send_response(200)
     handler.send_header('Content-Type', ctype or 'video/mp2t')
     length = resp.headers.get('Content-Length')
@@ -599,13 +774,17 @@ def _pipe(handler, resp, first, ctype):
     handler.end_headers()
     try:
         handler.wfile.write(first)
+        handler.wfile.flush()
         while True:
-            chunk = resp.read(64 * 1024)
+            chunk = resp.read1(64 * 1024)   # repassa assim que chega (read() esperava juntar 64 KB)
             if not chunk:
                 break
             handler.wfile.write(chunk)
+            handler.wfile.flush()
     except (BrokenPipeError, ConnectionResetError):
         pass   # o player fechou
+    except (TimeoutError, OSError) as exc:
+        print(f'CANAL: fonte sem dados por {STREAM_READ_TIMEOUT}s ou conexão perdida: {type(exc).__name__}', flush=True)
 
 
 def stream(handler, cid, kind, t):
@@ -914,13 +1093,16 @@ def playlist(t, base='', fmt=''):
         needs = bool(r['ua'] or r['referer']) or r['id'] in with_alts
         if base and fmt == 'ts':
             lines.append(f'{base}/strm-api/ch/{r["id"]}.ts?t={t}')
+        hls = r.get('hls') if (r.get('hls') or '').startswith('http') else ''
+        if base and fmt == 'ts':
+            pass
         elif base and (mode == 'proxy' or (mode == 'auto' and needs)):
-            kind = 'm3u8' if urlsplit(r['url']).path.lower().endswith('.m3u8') else 'ts'
+            kind = 'm3u8' if hls or urlsplit(r['url']).path.lower().endswith('.m3u8') else 'ts'
             lines.append(f'{base}/strm-api/ch/{r["id"]}.{kind}?t={t}')
         else:
             if r['ua']:
                 lines.append(f'#EXTVLCOPT:http-user-agent={r["ua"]}')
             if r['referer']:
                 lines.append(f'#EXTVLCOPT:http-referrer={r["referer"]}')
-            lines.append(r['url'])
+            lines.append(hls or r['url'])
     return '\n'.join(lines) + '\n'

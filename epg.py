@@ -280,8 +280,14 @@ def labels():
 
 # ------------------------------------------------------------------ guia publicado
 def out_id(row):
-    """id usado no guia e no tvg-id da lista M3U."""
-    return row['epg_channel'] if row.get('epg_channel') else (row.get('tvg_id') or '')
+    """id usado no guia e no tvg-id da lista M3U.
+
+    Nunca vazio: sem guia escolhido e sem tvg-id na fonte, sai um id fixo do próprio canal (sb.<id>).
+    Sem isso o Jellyfin casa canal e guia pelo NÚMERO, e ao mudar a ordem um canal herda o logo e a
+    programação de outro."""
+    if row.get('epg_channel'):
+        return row['epg_channel']
+    return row.get('tvg_id') or f"sb.{row.get('id', '')}"
 
 
 def _generate():

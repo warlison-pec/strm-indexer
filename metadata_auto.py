@@ -163,7 +163,7 @@ def _identify(row):
                 matches = jellyfin.search(title, kind).get('items', [])
                 c = _exact_candidate(matches, title, year, 'jellyfin')
                 if c:
-                    enrich.save(kind, original_title, 'jellyfin', c['id'], c['title'], c.get('year'), c.get('overview'), None)
+                    enrich.save(kind, original_title, 'jellyfin', c['id'], c['title'], c.get('year'), c.get('overview'), None, c.get('rating'), c.get('votes'))
                     jellyfin_saved = True
                     if c.get('has_image'):
                         image = jellyfin.poster(c['id'])
@@ -192,7 +192,8 @@ def _identify(row):
                 c = _exact_candidate(matches, title, year, 'seerr')
                 if c:
                     result = enrich.save(kind, original_title, 'seerr', c['id'],
-                                         c['title'], c.get('year'), c.get('overview'), c.get('poster'))
+                                         c['title'], c.get('year'), c.get('overview'), c.get('poster'),
+                                         c.get('rating'), c.get('votes'))
                     print(f'META_AUTO: Seerr; {original_title[:70]!r}; capa={result["poster_saved"]}', flush=True)
                     return 'done', None
                 errors.append('Seerr sem correspondencia exata e unica')
@@ -215,7 +216,7 @@ def _identify(row):
                 matches = tvmaze.search(title, kind).get('items', [])
                 c = _exact_candidate(matches, title, year, 'tvmaze')
                 if c:
-                    enrich.save(kind, original_title, 'tvmaze', c['id'], c['title'], c.get('year'), c.get('overview'), c.get('poster'))
+                    enrich.save(kind, original_title, 'tvmaze', c['id'], c['title'], c.get('year'), c.get('overview'), c.get('poster'), c.get('rating'), c.get('votes'))
                     print(f'META_AUTO: TVmaze; {title[:70]!r}', flush=True)
                     return 'done', None
                 errors.append('TVmaze sem correspondencia exata e unica')
@@ -236,7 +237,7 @@ def _identify(row):
                 candidates = tmdb.search(title, 'movie' if kind == 'movie' else 'tv', year).get('items', [])
                 c = _exact_candidate(candidates, title, year, 'tmdb')
                 if c:
-                    enrich.save(kind, original_title, 'tmdb', c['id'], c['title'], c.get('year'), c.get('overview'), c.get('poster'))
+                    enrich.save(kind, original_title, 'tmdb', c['id'], c['title'], c.get('year'), c.get('overview'), c.get('poster'), c.get('rating'), c.get('votes'))
                     return 'done', None
                 errors.append('TMDB sem correspondencia exata e unica')
             except HTTPError as exc:
@@ -266,7 +267,7 @@ def _identify(row):
                 candidates = tvdb.search(title, kind).get('items', [])
                 c = _exact_candidate(candidates, title, year, 'tvdb')
                 if c:
-                    enrich.save(kind, original_title, 'tvdb', c['id'], c['title'], c.get('year'), c.get('overview'), c.get('poster'))
+                    enrich.save(kind, original_title, 'tvdb', c['id'], c['title'], c.get('year'), c.get('overview'), c.get('poster'), c.get('rating'), c.get('votes'))
                     return 'done', None
                 errors.append('TheTVDB sem correspondencia exata e unica')
             except HTTPError as exc:
@@ -303,6 +304,8 @@ def loop(stop):
     """Process pending requests; log cooldown/retries and recover per-item errors."""
     global COOLDOWN
     print('META_AUTO: trabalhador iniciado', flush=True)
+    if SCAN_ON:
+        threading.Thread(target=scan_loop, args=(stop,), daemon=True, name='meta-scan').start()
     last_pause_log = 0.0
     while not stop.is_set():
         now = time.time()
@@ -373,7 +376,151 @@ def loop(stop):
         stop.wait(GAP)
 
 
+# ------------------------------------------------------------------ varredura em segundo plano
+# Antes, um título só ganhava capa/sinopse quando aparecia na tela do painel. A varredura mantém a
+# fila abastecida sozinha: primeiro os itens da aba Gerenciados, depois o catálogo inteiro em ordem
+# alfabética (com um cursor que continua de onde parou, inclusive após reiniciar). O ritmo continua o
+# do trabalhador (um item a cada INDEXER_META_GAP_SECONDS), então não esbarra nos limites do TMDB/TVDB.
+SCAN_ON = os.getenv('INDEXER_META_SCAN', '1') != '0'
+SCAN_EVERY = max(60., float(os.getenv('INDEXER_META_SCAN_SECONDS', '300')))
+SCAN_KEEP = 40            # mantém até este tanto de itens esperando na fila
+SCAN_STATE = {'cursor': '', 'cycle_done_at': 0.0, 'added': 0, 'last_run': 0.0}
+
+
+def _meta_get(db, k, default=''):
+    db.execute('CREATE TABLE IF NOT EXISTS scan_meta(k TEXT PRIMARY KEY, v TEXT)')
+    row = db.execute('SELECT v FROM scan_meta WHERE k=?', (k,)).fetchone()
+    return row[0] if row else default
+
+
+def _meta_set(db, k, v):
+    db.execute('INSERT INTO scan_meta(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v', (k, str(v)))
+
+
+def _known_keys():
+    keys = set()
+    try:
+        with sqlite3.connect(enrich.DB, timeout=15) as c:
+            keys |= {r[0] for r in c.execute('SELECT content_key FROM metadata')}
+    except sqlite3.Error:
+        pass
+    with sqlite3.connect(DB, timeout=15) as db:
+        keys |= {r[0] for r in db.execute('SELECT content_key FROM requests')}
+    return keys
+
+
+def _queue_items(db, items, known):
+    now, added = time.time(), 0
+    for kind, title, year in items:
+        try:
+            key = enrich.canonical(kind, title)
+        except ValueError:
+            continue
+        if key in known or len(norm(title)) < 5:
+            continue
+        known.add(key)
+        db.execute('''INSERT OR IGNORE INTO requests (content_key,kind,title,year,state,next_at,updated_at)
+                      VALUES(?,?,?,?, 'queued',?,?)''', (key, kind, title, year, now, now))
+        added += 1
+    return added
+
+
+def _scan_once():
+    import content_filter
+    from indexer import DB as CATALOG
+    with LOCK, sqlite3.connect(DB, timeout=15) as db:
+        waiting = db.execute("SELECT COUNT(*) FROM requests WHERE state='queued'").fetchone()[0]
+        room = SCAN_KEEP - waiting
+        if room <= 0:
+            return 0
+        known = _known_keys()
+        added = 0
+        # 1) itens gerenciados (os que já viraram STRM) primeiro
+        try:
+            import media_control as media
+            with media.connect() as mc:
+                managed = [(r['kind'], r['title'], None) for r in mc.execute('SELECT kind, title FROM managed')]
+            added += _queue_items(db, managed[: room * 4], known)
+        except Exception:
+            pass
+        # 2) catálogo em ordem alfabética, continuando do cursor
+        cursor = _meta_get(db, 'cursor')
+        cycle_done = float(_meta_get(db, 'cycle_done_at', '0') or 0)
+        if added < room and not (cursor == '' and cycle_done and time.time() - cycle_done < 86400):
+            block_sql, block_params = content_filter.where()
+            try:
+                with sqlite3.connect(f'file:{CATALOG}?mode=ro', uri=True, timeout=15) as cat:
+                    rows = cat.execute(
+                        "SELECT normalized, kind, MIN(title), MIN(year) FROM entries "
+                        "WHERE kind IN ('movie','episode') AND normalized > ? AND " + block_sql +
+                        " GROUP BY normalized, kind ORDER BY normalized LIMIT 400",
+                        [cursor] + block_params).fetchall()
+            except sqlite3.Error:
+                rows = []
+            for normalized, kind, title, year in rows:
+                if added >= room:
+                    break
+                added += _queue_items(db, [(kind, title, year)], known)
+                cursor = normalized
+            if not rows or (len(rows) < 400 and added < room):
+                cursor = ''                                   # fim do catálogo: recomeça em 24 h
+                _meta_set(db, 'cycle_done_at', time.time())
+            _meta_set(db, 'cursor', cursor)
+        SCAN_STATE.update(cursor=cursor, cycle_done_at=float(_meta_get(db, 'cycle_done_at', '0') or 0), last_run=time.time())
+        SCAN_STATE['added'] += added
+    if added:
+        WAKE.set()
+    return added
+
+
+def _backfill_ratings(stop, limit=10):
+    """Completa a nota dos títulos que já tinham metadados (TMDB/Seerr usam o mesmo id do TMDB)."""
+    if not tmdb.configured() or time.time() < COOLDOWN:
+        return 0
+    try:
+        with sqlite3.connect(enrich.DB, timeout=15) as c:
+            rows = c.execute("SELECT content_key, kind, provider_id FROM metadata WHERE rating IS NULL "
+                             "AND provider IN ('tmdb','seerr') LIMIT ?", (limit,)).fetchall()
+    except sqlite3.Error:
+        return 0
+    done = 0
+    for key, kind, pid in rows:
+        if stop.is_set():
+            break
+        try:
+            d = tmdb._fetch(('movie/' if kind == 'movie' else 'tv/') + str(int(pid)))
+            rating, votes = d.get('vote_average'), d.get('vote_count')
+        except HTTPError as exc:
+            if exc.code == 429:
+                break
+            rating, votes = 0, 0          # id inexistente: grava 0 para não tentar de novo
+        except (URLError, TimeoutError, OSError, ValueError):
+            break
+        with sqlite3.connect(enrich.DB, timeout=15) as c:
+            c.execute('UPDATE metadata SET rating=?, votes=? WHERE content_key=?',
+                      (float(rating or 0), int(votes or 0), key))
+        done += 1
+        stop.wait(GAP / 2)
+    return done
+
+
+def scan_loop(stop):
+    print(f'META_SCAN: varredura automática ligada (a cada {int(SCAN_EVERY)}s)', flush=True)
+    stop.wait(60)
+    while not stop.is_set():
+        try:
+            n = _scan_once()
+            if n:
+                print(f'META_SCAN: {n} título(s) colocados na fila', flush=True)
+            r = _backfill_ratings(stop)
+            if r:
+                print(f'META_SCAN: nota completada em {r} título(s)', flush=True)
+        except Exception as exc:
+            print('META_SCAN:', type(exc).__name__, str(exc)[:120], flush=True)
+        stop.wait(SCAN_EVERY)
+
+
 def stats():
     with sqlite3.connect(DB, timeout=10) as db:
         counts = dict(db.execute('SELECT state,COUNT(*) FROM requests GROUP BY state').fetchall())
-    return {'counts': counts, 'cooldown_seconds': max(0, int(COOLDOWN-time.time())), 'tvdb_cooldown_seconds': max(0, int(TVDB_COOLDOWN-time.time())), 'tvmaze_cooldown_seconds': max(0, int(TVMAZE_COOLDOWN-time.time())), 'jellyfin_cooldown_seconds': max(0, int(JELLYFIN_COOLDOWN-time.time())), 'seerr_cooldown_seconds': max(0, int(SEERR_COOLDOWN-time.time()))}
+    return {'counts': counts, 'scan': {'enabled': SCAN_ON, **SCAN_STATE}, 'cooldown_seconds': max(0, int(COOLDOWN-time.time())), 'tvdb_cooldown_seconds': max(0, int(TVDB_COOLDOWN-time.time())), 'tvmaze_cooldown_seconds': max(0, int(TVMAZE_COOLDOWN-time.time())), 'jellyfin_cooldown_seconds': max(0, int(JELLYFIN_COOLDOWN-time.time())), 'seerr_cooldown_seconds': max(0, int(SEERR_COOLDOWN-time.time()))}

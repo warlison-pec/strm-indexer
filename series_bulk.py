@@ -50,6 +50,19 @@ def setup():
         CREATE INDEX IF NOT EXISTS idx_series_pending_due
           ON series_pending(state,next_check);
         ''')
+        # Normalização mudou (marcas LEG/DUB/(L), ano solto): alinha os registros antigos ao nome novo.
+        # Se duas grafias viraram o mesmo nome, fica um registro só (o que já estava adicionado tem prioridade).
+        for r in c.execute("SELECT id, normalized, title FROM series_pending ORDER BY (state='added') DESC, id").fetchall():
+            new = norm(r['title'])
+            if new and new != r['normalized']:
+                try:
+                    c.execute('UPDATE series_pending SET normalized=? WHERE id=?', (new, r['id']))
+                except sqlite3.IntegrityError:
+                    c.execute('DELETE FROM series_pending WHERE id=?', (r['id'],))
+        for r in c.execute('SELECT id, normalized, title FROM series_jobs').fetchall():
+            new = norm(r['title'])
+            if new and new != r['normalized']:
+                c.execute('UPDATE series_jobs SET normalized=? WHERE id=?', (new, r['id']))
         # Jobs interrupted by container restart are continued automatically.
         c.execute("UPDATE series_jobs SET state='queued',completed=0,added=0,already=0,pending=0,updated_at=? WHERE state='running'", (time.time(),))
 
@@ -76,8 +89,11 @@ def _candidates(title, source='', season=None):
     with sqlite3.connect(f'file:{DB}?mode=ro', uri=True, timeout=20) as c:
         c.row_factory = sqlite3.Row
         rows = [dict(row) for row in c.execute(
-            'SELECT id,title,source,season,episode FROM entries WHERE '+where+
+            'SELECT id,title,source,season,episode,media_url FROM entries WHERE '+where+
             ' ORDER BY season,episode,source,id LIMIT 10001', params)]
+    # Fontes de cada episódio na ordem em que serão testadas: primeiro as mais fáceis para o Jellyfin
+    # (arquivo de vídeo, depois HLS .m3u8); HLS fora do padrão só se as outras falharem.
+    rows.sort(key=lambda r: (r['season'], r['episode'], media.source_rank(r['media_url'])))
     grouped = {}
     for r in rows:
         grouped.setdefault((r['season'], r['episode']), []).append(r['id'])

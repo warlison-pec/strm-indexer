@@ -1,0 +1,18 @@
+SAIMO SÉRIES v1.1 — CORREÇÃO LETRA Q SEM SHARD
+
+O índice series-Q.txt existe, porém series-Q-1.txt retorna 404 no seu servidor.
+Por padrão, permite ignorar APENAS a letra Q quando o primeiro shard está ausente.
+Essa exceção é mostrada em 'skipped_no_shard' no resultado. Nenhuma outra letra é ignorada.
+
+Instalação:
+  cd /mnt/sdb1/strm-indexer
+  cp -a saimo_series_m3u.py "saimo_series_m3u.py.bak-$(date +%Y%m%d-%H%M%S)"
+  unzip -o streambox-saimo-series-v1.1.zip
+  python3 saimo_series_m3u.py
+  grep -c '^#EXTINF:' playlists/saimo-series.m3u
+
+Modo estrito (não ignorar Q): python3 saimo_series_m3u.py --skip-no-shard ''
+Se outra letra falhar, NÃO ignore automaticamente; investigue.
+A rotina diária permanece em saimo-series-daily.sh e somente reindexa se houver alteração.
+Não inicie cron antes de validar o resultado; o arquivo anterior só é substituído após completar a exportação.
+Use somente fontes para as quais você possui autorização de reprodução.

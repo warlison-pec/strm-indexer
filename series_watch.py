@@ -38,6 +38,14 @@ def setup():
         );
         CREATE TABLE IF NOT EXISTS series_watch_meta(k TEXT PRIMARY KEY, v TEXT);
         ''')
+        # Alinha as séries monitoradas à normalização atual (duas grafias da mesma série viram uma só)
+        for r in c.execute('SELECT rowid, normalized, source, title FROM series_watch').fetchall():
+            new = norm(r['title'])
+            if new and new != r['normalized']:
+                try:
+                    c.execute('UPDATE series_watch SET normalized=? WHERE rowid=?', (new, r['rowid']))
+                except sqlite3.IntegrityError:
+                    c.execute('DELETE FROM series_watch WHERE rowid=?', (r['rowid'],))
 
 
 def _meta(c, k, default=''):

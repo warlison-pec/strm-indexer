@@ -36,5 +36,6 @@ def search(title, kind='episode'):
         overview = ' '.join(html.unescape(overview).split())[:2000]
         if show.get('id') and name:
             items.append({'id': show['id'], 'title': name, 'original_title': '',
-                          'year': year, 'overview': overview, 'poster': poster})
+                          'year': year, 'overview': overview, 'poster': poster,
+                          'rating': (show.get('rating') or {}).get('average'), 'votes': None})
     return {'items': items}

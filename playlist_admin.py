@@ -75,9 +75,66 @@ class GitHubRedirect(HTTPRedirectHandler):
 OPENER = build_opener(GitHubRedirect())
 
 
+# ------------------------------------------------------------------ links de provedor (ex.: get.php do Xtream)
+SECRET_PARAMS = re.compile(r'(?i)([?&](?:password|pass|pwd|token|key|senha)=)[^&#]*')
+PROVIDER_UA = 'VLC/3.0.20 LibVLC/3.0.20'   # muitos provedores só entregam a lista para "players"
+
+
+class PublicRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        _check_public(newurl)          # redirecionamento também não pode ir para a rede interna
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+PUBLIC_OPENER = build_opener(PublicRedirect())
+
+
+def _check_public(url):
+    import epg                          # mesma regra das fontes de guia: só endereços públicos ou liberados
+    epg._check(url)
+
+
+def list_url(raw):
+    """Link de lista aceito: GitHub (convertido para raw) ou um link http(s) de provedor (get.php etc.)."""
+    if not isinstance(raw, str) or not raw.strip() or len(raw) > 2000:
+        raise ValueError('Endereço inválido')
+    raw = raw.strip()
+    host = (urlsplit(raw).hostname or '').lower()
+    if host in ('github.com', 'raw.githubusercontent.com'):
+        return github_raw_url(raw)
+    p = urlsplit(raw)
+    if p.scheme not in ('http', 'https') or not p.hostname or p.username or p.password:
+        raise ValueError('Use um link http(s) da lista (ex.: …/get.php?username=…&type=m3u_plus)')
+    _check_public(raw)
+    return raw
+
+
+def masked(url):
+    """Link para exibir no painel, sem senha/token."""
+    return SECRET_PARAMS.sub(lambda m: m.group(1) + '••••', url or '')
+
+
+def _open_list(url):
+    if urlsplit(url).hostname == 'raw.githubusercontent.com':
+        return OPENER.open(Request(url, headers={'User-Agent': 'STRMIndexer/0.5', 'Accept': 'text/plain, */*'}), timeout=25)
+    # provedores costumam montar a lista na hora: espera mais
+    return PUBLIC_OPENER.open(Request(url, headers={'User-Agent': PROVIDER_UA, 'Accept': '*/*'}), timeout=120)
+
+
+def _link_name(url):
+    p = urlsplit(url)
+    if p.hostname == 'raw.githubusercontent.com':
+        return filename('github-' + p.path.split('/')[-1])
+    base = 'link-' + re.sub(r'[^a-z0-9.-]+', '-', (p.hostname or 'lista').lower()).strip('-.')
+    name, n = filename(base + '.m3u'), 2
+    while (ROOT / name).exists() or name in _registry():
+        name, n = filename(f'{base}-{n}.m3u'), n + 1
+    return name
+
+
 def _check_header(chunk):
     if not chunk.lstrip(b'\xef\xbb\xbf\r\n \t').startswith(b'#EXTM3U'):
-        raise ValueError('O conteúdo não começa com #EXTM3U')
+        raise ValueError('O link não devolveu uma lista M3U (teste expirado, usuário/senha errados ou o provedor bloqueou o acesso)')
 
 
 def _write_stream(target, fileobj, count=None):
@@ -108,7 +165,7 @@ def _write_stream(target, fileobj, count=None):
         if count is not None and total != count:
             raise ValueError('Upload incompleto')
         if total < 8:
-            raise ValueError('Lista vazia')
+            raise ValueError('O link devolveu uma lista vazia (teste expirado, usuário/senha errados ou o provedor bloqueou o acesso)')
         os.replace(tmp, target)
         return total
     finally:
@@ -132,20 +189,19 @@ def upload(rawname, stream, content_length):
 
 
 def add_github(url):
-    clean = github_raw_url(url)
-    p = urlsplit(clean)
-    # Prefix prevents a collision with locally uploaded files.
-    name = filename('github-' + p.path.split('/')[-1])
+    """Cadastra uma lista por link (GitHub ou provedor) e baixa agora."""
+    clean = list_url(url)
+    # Prefixo evita colisão com listas enviadas como arquivo.
+    name = _link_name(clean)
     if not LOCK.acquire(blocking=False):
         raise ValueError('Outra atualização de playlist está em andamento')
     try:
         registry = _registry()
         if name in registry or (ROOT / name).exists():
             raise ValueError('Arquivo já cadastrado; atualize-o ou escolha outra fonte')
-        req = Request(clean, headers={'User-Agent': 'STRMIndexer/0.5', 'Accept': 'text/plain, */*'})
-        with OPENER.open(req, timeout=25) as response:
+        with _open_list(clean) as response:
             if response.status != 200:
-                raise ValueError('O GitHub não retornou HTTP 200')
+                raise ValueError(f'O servidor da lista respondeu HTTP {response.status}')
             amount = _write_stream(ROOT / name, response)
         registry[name] = clean
         _save_registry(registry)
@@ -158,22 +214,28 @@ def refresh(name):
     name = filename(name)
     registry = _registry()
     if name not in registry:
-        raise ValueError('Somente listas cadastradas pelo link GitHub podem ser atualizadas')
-    clean = github_raw_url(registry[name])
+        raise ValueError('Somente listas cadastradas por link podem ser atualizadas')
+    clean = list_url(registry[name])
     if not LOCK.acquire(blocking=False):
         raise ValueError('Outra atualização de playlist está em andamento')
     try:
-        req = Request(clean, headers={'User-Agent': 'STRMIndexer/0.5'})
-        with OPENER.open(req, timeout=25) as response:
+        with _open_list(clean) as response:
             amount = _write_stream(ROOT / name, response)
         return {'filename': name, 'bytes': amount}
     finally:
         LOCK.release()
 
 
+def _not_indexing():
+    # renomear/apagar no meio da indexação faria ela procurar um arquivo que não existe mais
+    if JOB.get('state') == 'running':
+        raise ValueError('Aguarde a indexação terminar para renomear ou excluir listas')
+
+
 def remove(name):
     """Apaga uma lista (arquivo e link cadastrado). O catálogo é reindexado em seguida."""
     name = filename(name)
+    _not_indexing()
     target = ROOT / name
     if not target.is_file():
         raise ValueError('Lista não encontrada')
@@ -190,8 +252,9 @@ def remove(name):
 
 
 def edit(name, new_name=None, url=None):
-    """Renomeia a lista e/ou troca o link do GitHub (baixando de novo). Reindexa em seguida."""
+    """Renomeia a lista e/ou troca o link (baixando de novo). Reindexa em seguida."""
     name = filename(name)
+    _not_indexing()
     source = ROOT / name
     if not source.is_file():
         raise ValueError('Lista não encontrada')
@@ -203,8 +266,11 @@ def edit(name, new_name=None, url=None):
             new_name += source.suffix          # mantém a extensão se o usuário não digitar
         final = filename(new_name)
     if url not in (None, '') and name not in registry:
-        raise ValueError('Só listas importadas por link do GitHub têm link para editar')
-    clean = github_raw_url(url) if url not in (None, '') else None
+        raise ValueError('Só listas importadas por link têm link para editar')
+    # o painel mostra o link sem a senha: se voltar igual, o link não mudou
+    if url not in (None, '') and url.strip() == masked(registry.get(name, '')):
+        url = None
+    clean = list_url(url) if url not in (None, '') else None
     if final == name and (clean is None or clean == registry.get(name)):
         return {'filename': name, 'changed': False}
     if not LOCK.acquire(blocking=False):
@@ -217,10 +283,9 @@ def edit(name, new_name=None, url=None):
             if name in registry:
                 registry[final] = registry.pop(name)
         if clean is not None:
-            req = Request(clean, headers={'User-Agent': 'STRMIndexer/0.5', 'Accept': 'text/plain, */*'})
-            with OPENER.open(req, timeout=25) as response:
+            with _open_list(clean) as response:
                 if response.status != 200:
-                    raise ValueError('O GitHub não retornou HTTP 200')
+                    raise ValueError(f'O servidor da lista respondeu HTTP {response.status}')
                 _write_stream(ROOT / final, response)
             registry[final] = clean
         _save_registry(registry)
@@ -239,7 +304,8 @@ def edit(name, new_name=None, url=None):
 
 def status():
     return {**JOB, 'files': [
-        {'name': p.name, 'size': p.stat().st_size, 'github': p.name in _registry(), 'url': _registry().get(p.name, '')}
+        {'name': p.name, 'size': p.stat().st_size, 'github': p.name in _registry(), 'url': masked(_registry().get(p.name, '')),
+         'provider': p.name in _registry() and urlsplit(_registry()[p.name]).hostname != 'raw.githubusercontent.com'}
         for p in sorted(ROOT.iterdir()) if p.is_file() and p.suffix.lower() in indexer.SUPPORTED
     ] if ROOT.exists() else []}
 

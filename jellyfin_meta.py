@@ -44,7 +44,7 @@ def search(title, kind):
     found = {}
     for query in requests[:2]:
         params = {'Recursive': 'true', 'IncludeItemTypes': 'Movie' if kind == 'movie' else 'Series',
-                  'SearchTerm': query, 'Fields': 'ProviderIds,Overview', 'Limit': '30'}
+                  'SearchTerm': query, 'Fields': 'ProviderIds,Overview,CommunityRating', 'Limit': '30'}
         data, _ = _get('/Items', params)
         for record in json.loads(data).get('Items', []):
             if record.get('Id'):
@@ -65,6 +65,7 @@ def search(title, kind):
             year = None
         items.append({'id': item_id, 'title': name, 'original_title': x.get('OriginalTitle') or '',
                       'year': year, 'overview': str(x.get('Overview') or '')[:2000],
+                      'rating': x.get('CommunityRating'), 'votes': None,
                       'has_image': bool((x.get('ImageTags') or {}).get('Primary'))})
     return {'items': items}
 
